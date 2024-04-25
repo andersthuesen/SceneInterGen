@@ -5,12 +5,18 @@ from datasets.evaluator import (
     EvaluatorModelWrapper,
     EvaluationDataset,
     get_dataset_motion_loader,
-    get_motion_loader)
+    get_motion_loader,
+)
+
 # from .dataloader import build_dataloader
 
 __all__ = [
-    'InterHumanDataset', 'EvaluationDataset',
-    'get_dataset_motion_loader', 'get_motion_loader']
+    "InterHumanDataset",
+    "EvaluationDataset",
+    "get_dataset_motion_loader",
+    "get_motion_loader",
+]
+
 
 def build_loader(cfg, data_cfg):
     # setup data
@@ -26,9 +32,10 @@ def build_loader(cfg, data_cfg):
         pin_memory=False,
         shuffle=True,
         drop_last=True,
-        )
+    )
 
     return loader
+
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, cfg, batch_size, num_workers):
@@ -43,7 +50,7 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-    def setup(self, stage = None):
+    def setup(self, stage=None):
         """
         Create train and validation datasets
         """
@@ -63,4 +70,4 @@ class DataModule(pl.LightningDataModule):
             pin_memory=False,
             shuffle=True,
             drop_last=True,
-            )
+        )

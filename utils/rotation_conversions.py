@@ -526,12 +526,12 @@ def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
     Retrieved from http://arxiv.org/abs/1812.07035
     """
 
-    a1, a2 = d6[..., [0,2,4]], d6[..., [1,3,5]]
+    a1, a2 = d6[..., [0, 2, 4]], d6[..., [1, 3, 5]]
     b1 = F.normalize(a1, dim=-1)
     b2 = a2 - (b1 * a2).sum(-1, keepdim=True) * b1
     b2 = F.normalize(b2, dim=-1)
     b3 = torch.cross(b1, b2, dim=-1)
-    return torch.cat((b1[...,None], b2[...,None], b3[...,None]), dim=-1)
+    return torch.cat((b1[..., None], b2[..., None], b3[..., None]), dim=-1)
 
 
 def matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:

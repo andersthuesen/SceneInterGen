@@ -15,12 +15,9 @@ from torch.utils.data import DistributedSampler as _DistributedSampler
 
 class DistributedSampler(_DistributedSampler):
 
-    def __init__(self,
-                 dataset,
-                 num_replicas=None,
-                 rank=None,
-                 shuffle=True,
-                 round_up=True):
+    def __init__(
+        self, dataset, num_replicas=None, rank=None, shuffle=True, round_up=True
+    ):
         super().__init__(dataset, num_replicas=num_replicas, rank=rank)
         self.shuffle = shuffle
         self.round_up = round_up
@@ -40,29 +37,31 @@ class DistributedSampler(_DistributedSampler):
 
         # add extra samples to make it evenly divisible
         if self.round_up:
-            indices = (
-                indices *
-                int(self.total_size / len(indices) + 1))[:self.total_size]
+            indices = (indices * int(self.total_size / len(indices) + 1))[
+                : self.total_size
+            ]
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank:self.total_size:self.num_replicas]
+        indices = indices[self.rank : self.total_size : self.num_replicas]
         if self.round_up:
             assert len(indices) == self.num_samples
 
         return iter(indices)
 
 
-def build_dataloader(dataset: Dataset,
-                     samples_per_gpu: int,
-                     workers_per_gpu: int,
-                     num_gpus: Optional[int] = 1,
-                     dist: Optional[bool] = True,
-                     shuffle: Optional[bool] = True,
-                     round_up: Optional[bool] = True,
-                     seed: Optional[Union[int, None]] = None,
-                     persistent_workers: Optional[bool] = True,
-                     **kwargs):
+def build_dataloader(
+    dataset: Dataset,
+    samples_per_gpu: int,
+    workers_per_gpu: int,
+    num_gpus: Optional[int] = 1,
+    dist: Optional[bool] = True,
+    shuffle: Optional[bool] = True,
+    round_up: Optional[bool] = True,
+    seed: Optional[Union[int, None]] = None,
+    persistent_workers: Optional[bool] = True,
+    **kwargs
+):
     """Build PyTorch DataLoader.
 
     In distributed training, each GPU/process has a dataloader.
@@ -94,7 +93,8 @@ def build_dataloader(dataset: Dataset,
     rank, world_size = get_dist_info()
     if dist:
         sampler = DistributedSampler(
-            dataset, world_size, rank, shuffle=shuffle, round_up=round_up)
+            dataset, world_size, rank, shuffle=shuffle, round_up=round_up
+        )
         shuffle = False
         batch_size = samples_per_gpu
         num_workers = workers_per_gpu
@@ -103,9 +103,11 @@ def build_dataloader(dataset: Dataset,
         batch_size = num_gpus * samples_per_gpu
         num_workers = num_gpus * workers_per_gpu
 
-    init_fn = partial(
-        worker_init_fn, num_workers=num_workers, rank=rank,
-        seed=seed) if seed is not None else None
+    init_fn = (
+        partial(worker_init_fn, num_workers=num_workers, rank=rank, seed=seed)
+        if seed is not None
+        else None
+    )
 
     data_loader = DataLoader(
         dataset,
@@ -116,9 +118,8 @@ def build_dataloader(dataset: Dataset,
         shuffle=shuffle,
         worker_init_fn=init_fn,
         persistent_workers=persistent_workers,
-        **kwargs)
-
-
+        **kwargs
+    )
 
     return data_loader
 

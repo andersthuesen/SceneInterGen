@@ -1,6 +1,7 @@
 import copy
 import os.path
 import sys
+
 sys.path.append(sys.path[0] + r"/../")
 import torch
 import lightning as L
@@ -14,6 +15,7 @@ from utils.plot_script import *
 from utils.preprocess import *
 from utils import paramUtil
 
+
 class LitGenModel(L.LightningModule):
     def __init__(self, model, cfg):
         super().__init__()
@@ -23,9 +25,9 @@ class LitGenModel(L.LightningModule):
         self.automatic_optimization = False
 
         self.save_root = pjoin(self.cfg.GENERAL.CHECKPOINT, self.cfg.GENERAL.EXP_NAME)
-        self.model_dir = pjoin(self.save_root, 'model')
-        self.meta_dir = pjoin(self.save_root, 'meta')
-        self.log_dir = pjoin(self.save_root, 'log')
+        self.model_dir = pjoin(self.save_root, "model")
+        self.meta_dir = pjoin(self.save_root, "meta")
+        self.log_dir = pjoin(self.save_root, "log")
 
         os.makedirs(self.model_dir, exist_ok=True)
         os.makedirs(self.meta_dir, exist_ok=True)
@@ -41,20 +43,21 @@ class LitGenModel(L.LightningModule):
         mp_joint = []
         for i, data in enumerate(mp_data):
             if i == 0:
-                joint = data[:,:22*3].reshape(-1,22,3)
+                joint = data[:, : 22 * 3].reshape(-1, 22, 3)
             else:
-                joint = data[:,:22*3].reshape(-1,22,3)
+                joint = data[:, : 22 * 3].reshape(-1, 22, 3)
 
             mp_joint.append(joint)
 
-        plot_3d_motion(result_path, paramUtil.t2m_kinematic_chain, mp_joint, title=caption, fps=30)
-
+        plot_3d_motion(
+            result_path, paramUtil.t2m_kinematic_chain, mp_joint, title=caption, fps=30
+        )
 
     def generate_one_sample(self, prompt, name):
         self.model.eval()
         batch = OrderedDict({})
 
-        batch["motion_lens"] = torch.zeros(1,1).long().cuda()
+        batch["motion_lens"] = torch.zeros(1, 1).long().cuda()
         batch["prompt"] = prompt
 
         window_size = 210
@@ -63,9 +66,9 @@ class LitGenModel(L.LightningModule):
         if not os.path.exists("results"):
             os.makedirs("results")
 
-        self.plot_t2m([motion_output[0], motion_output[1]],
-                      result_path,
-                      batch["prompt"])
+        self.plot_t2m(
+            [motion_output[0], motion_output[1]], result_path, batch["prompt"]
+        )
 
     def generate_loop(self, batch, window_size):
         prompt = batch["prompt"]
@@ -76,21 +79,24 @@ class LitGenModel(L.LightningModule):
 
         batch["text"] = [prompt]
         batch = self.model.forward_test(batch)
-        motion_output_both = batch["output"][0].reshape(batch["output"][0].shape[0], 2, -1)
-        motion_output_both = self.normalizer.backward(motion_output_both.cpu().detach().numpy())
-
+        motion_output_both = batch["output"][0].reshape(
+            batch["output"][0].shape[0], 2, -1
+        )
+        motion_output_both = self.normalizer.backward(
+            motion_output_both.cpu().detach().numpy()
+        )
 
         for j in range(2):
-            motion_output = motion_output_both[:,j]
+            motion_output = motion_output_both[:, j]
 
-            joints3d = motion_output[:,:22*3].reshape(-1,22,3)
-            joints3d = filters.gaussian_filter1d(joints3d, 1, axis=0, mode='nearest')
+            joints3d = motion_output[:, : 22 * 3].reshape(-1, 22, 3)
+            joints3d = filters.gaussian_filter1d(joints3d, 1, axis=0, mode="nearest")
             sequences[j].append(joints3d)
-
 
         sequences[0] = np.concatenate(sequences[0], axis=0)
         sequences[1] = np.concatenate(sequences[1], axis=0)
         return sequences
+
 
 def build_models(cfg):
     if cfg.NAME == "InterGen":
@@ -98,8 +104,7 @@ def build_models(cfg):
     return model
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     # torch.manual_seed(37)
     model_cfg = get_config("configs/model.yaml")
     infer_cfg = get_config("configs/infer.yaml")
@@ -116,7 +121,6 @@ if __name__ == '__main__':
 
     litmodel = LitGenModel(model, infer_cfg).to(torch.device("cuda:0"))
 
-
     with open(".\prompts.txt") as f:
         texts = f.readlines()
     texts = [text.strip("\n") for text in texts]
@@ -124,5 +128,4 @@ if __name__ == '__main__':
     for text in texts:
         name = text[:48]
         for i in range(3):
-            litmodel.generate_one_sample(text, name+"_"+str(i))
-
+            litmodel.generate_one_sample(text, name + "_" + str(i))

@@ -13,7 +13,9 @@ def to_lower(x: Dict) -> Dict:
     """
     return {k.lower(): v for k, v in x.items()}
 
+
 _C = CN(new_allowed=True)
+
 
 def default_config() -> CN:
     """
@@ -22,6 +24,7 @@ def default_config() -> CN:
     # Return a clone so that the defaults will not be altered
     # This is for the "local variable" use pattern
     return _C.clone()
+
 
 def get_config(config_file: str, merge: bool = True) -> CN:
     """
@@ -33,12 +36,13 @@ def get_config(config_file: str, merge: bool = True) -> CN:
       CfgNode: Config as a yacs CfgNode object.
     """
     if merge:
-      cfg = default_config()
+        cfg = default_config()
     else:
-      cfg = CN(new_allowed=True)
+        cfg = CN(new_allowed=True)
     cfg.merge_from_file(config_file)
     cfg.freeze()
     return cfg
+
 
 def dataset_config() -> CN:
     """
@@ -47,8 +51,9 @@ def dataset_config() -> CN:
       CfgNode: Dataset config as a yacs CfgNode object.
     """
     cfg = CN(new_allowed=True)
-    config_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'datasets.yaml')
+    config_file = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "datasets.yaml"
+    )
     cfg.merge_from_file(config_file)
     cfg.freeze()
     return cfg
-

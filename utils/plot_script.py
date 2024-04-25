@@ -6,6 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, FFMpegFileWriter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import mpl_toolkits.mplot3d.axes3d as p3
+
 # import cv2
 
 
@@ -23,14 +24,22 @@ def list_cut_average(ll, intervals):
     return ll_new
 
 
-def plot_3d_motion(save_path, kinematic_tree, mp_joints, title, figsize=(10, 10), fps=120, radius=4):
-    matplotlib.use('Agg')
+def plot_3d_motion(
+    save_path, kinematic_tree, mp_joints, title, figsize=(10, 10), fps=120, radius=4
+):
+    matplotlib.use("Agg")
 
-    title_sp = title.split(' ')
+    title_sp = title.split(" ")
     if len(title_sp) > 20:
-        title = '\n'.join([' '.join(title_sp[:10]), ' '.join(title_sp[10:20]), ' '.join(title_sp[20:])])
+        title = "\n".join(
+            [
+                " ".join(title_sp[:10]),
+                " ".join(title_sp[10:20]),
+                " ".join(title_sp[20:]),
+            ]
+        )
     elif len(title_sp) > 10:
-        title = '\n'.join([' '.join(title_sp[:10]), ' '.join(title_sp[10:])])
+        title = "\n".join([" ".join(title_sp[:10]), " ".join(title_sp[10:])])
 
     def init():
         ax.set_xlim3d([-radius / 4, radius / 4])
@@ -46,7 +55,7 @@ def plot_3d_motion(save_path, kinematic_tree, mp_joints, title, figsize=(10, 10)
             [minx, miny, minz],
             [minx, miny, maxz],
             [maxx, miny, maxz],
-            [maxx, miny, minz]
+            [maxx, miny, minz],
         ]
         xz_plane = Poly3DCollection([verts])
         xz_plane.set_facecolor((0.5, 0.5, 0.5, 0.5))
@@ -66,21 +75,34 @@ def plot_3d_motion(save_path, kinematic_tree, mp_joints, title, figsize=(10, 10)
     #           'darkblue', 'darkblue', 'darkblue', 'darkblue', 'darkblue',
     #           'darkred', 'darkred', 'darkred', 'darkred', 'darkred']
     #
-    colors = ['red', 'green', 'black', 'red', 'blue',
-              'darkblue', 'darkblue', 'darkblue', 'darkblue', 'darkblue',
-              'darkred', 'darkred', 'darkred', 'darkred', 'darkred']
+    colors = [
+        "red",
+        "green",
+        "black",
+        "red",
+        "blue",
+        "darkblue",
+        "darkblue",
+        "darkblue",
+        "darkblue",
+        "darkblue",
+        "darkred",
+        "darkred",
+        "darkred",
+        "darkred",
+        "darkred",
+    ]
 
-    mp_offset = list(range(-len(mp_joints)//2, len(mp_joints)//2, 1))
+    mp_offset = list(range(-len(mp_joints) // 2, len(mp_joints) // 2, 1))
     mp_colors = [[colors[i]] * 15 for i in range(len(mp_offset))]
 
-    for i,joints in enumerate(mp_joints):
+    for i, joints in enumerate(mp_joints):
 
         # (seq_len, joints_num, 3)
         data = joints.copy().reshape(len(joints), -1, 3)
 
         MINS = data.min(axis=0).min(axis=0)
         MAXS = data.max(axis=0).max(axis=0)
-
 
         #     print(data.shape)
 
@@ -92,10 +114,14 @@ def plot_3d_motion(save_path, kinematic_tree, mp_joints, title, figsize=(10, 10)
         # data[:, :, 0] += mp_offset[i]
         #
         # data[:, :, 2] -= data[0:1, 0:1, 2]
-        mp_data.append({"joints":data,
-                        "MINS":MINS,
-                        "MAXS":MAXS,
-                        "trajec":trajec, })
+        mp_data.append(
+            {
+                "joints": data,
+                "MINS": MINS,
+                "MAXS": MAXS,
+                "trajec": trajec,
+            }
+        )
 
     #     print(trajec.shape)
 
@@ -104,26 +130,33 @@ def plot_3d_motion(save_path, kinematic_tree, mp_joints, title, figsize=(10, 10)
         ax.lines = []
         ax.collections = []
         ax.view_init(elev=120, azim=-90)
-        ax.dist = 15#7.5
+        ax.dist = 15  # 7.5
         #         ax =
         plot_xzPlane(-3, 3, 0, -3, 3)
-        for pid,data in enumerate(mp_data):
+        for pid, data in enumerate(mp_data):
             for i, (chain, color) in enumerate(zip(kinematic_tree, mp_colors[pid])):
                 #             print(color)
                 if i < 5:
                     linewidth = 2.0
                 else:
                     linewidth = 1.0
-                ax.plot3D(data["joints"][index, chain, 0], data["joints"][index, chain, 1], data["joints"][index, chain, 2], linewidth=linewidth,
-                          color=color)
+                ax.plot3D(
+                    data["joints"][index, chain, 0],
+                    data["joints"][index, chain, 1],
+                    data["joints"][index, chain, 2],
+                    linewidth=linewidth,
+                    color=color,
+                )
         #         print(trajec[:index, 0].shape)
 
-        plt.axis('off')
+        plt.axis("off")
         ax.set_xticklabels([])
         ax.set_yticklabels([])
         ax.set_zticklabels([])
 
-    ani = FuncAnimation(fig, update, frames=frame_number, interval=1000 / fps, repeat=False)
+    ani = FuncAnimation(
+        fig, update, frames=frame_number, interval=1000 / fps, repeat=False
+    )
 
     # writer = FFMpegFileWriter(fps=fps)
     ani.save(save_path, fps=fps)

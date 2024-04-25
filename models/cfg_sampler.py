@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+
+
 class ClassifierFreeSampleModel(nn.Module):
 
     def __init__(self, model, cfg_scale):
@@ -22,5 +24,5 @@ class ClassifierFreeSampleModel(nn.Module):
         out_cond = out[:B]
         out_uncond = out[B:]
 
-        cfg_out = self.s *  out_cond + (1-self.s) *out_uncond
+        cfg_out = self.s * out_cond + (1 - self.s) * out_uncond
         return cfg_out

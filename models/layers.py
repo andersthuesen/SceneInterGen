@@ -1,5 +1,6 @@
 from .utils import *
 
+
 class AdaLN(nn.Module):
 
     def __init__(self, latent_dim, embed_dim=None):
@@ -32,18 +33,23 @@ class VanillaSelfAttention(nn.Module):
         super().__init__()
         self.num_head = num_head
         self.norm = AdaLN(latent_dim, embed_dim)
-        self.attention = nn.MultiheadAttention(latent_dim, num_head, dropout=dropout, batch_first=True,
-                                               add_zero_attn=True)
+        self.attention = nn.MultiheadAttention(
+            latent_dim, num_head, dropout=dropout, batch_first=True, add_zero_attn=True
+        )
 
     def forward(self, x, emb, key_padding_mask=None):
         """
         x: B, T, D
         """
         x_norm = self.norm(x, emb)
-        y = self.attention(x_norm, x_norm, x_norm,
-                           attn_mask=None,
-                           key_padding_mask=key_padding_mask,
-                           need_weights=False)[0]
+        y = self.attention(
+            x_norm,
+            x_norm,
+            x_norm,
+            attn_mask=None,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )[0]
         return y
 
 
@@ -54,8 +60,15 @@ class VanillaCrossAttention(nn.Module):
         self.num_head = num_head
         self.norm = AdaLN(latent_dim, embed_dim)
         self.xf_norm = AdaLN(xf_latent_dim, embed_dim)
-        self.attention = nn.MultiheadAttention(latent_dim, num_head, kdim=xf_latent_dim, vdim=xf_latent_dim,
-                                               dropout=dropout, batch_first=True, add_zero_attn=True)
+        self.attention = nn.MultiheadAttention(
+            latent_dim,
+            num_head,
+            kdim=xf_latent_dim,
+            vdim=xf_latent_dim,
+            dropout=dropout,
+            batch_first=True,
+            add_zero_attn=True,
+        )
 
     def forward(self, x, xf, emb, key_padding_mask=None):
         """
@@ -64,10 +77,14 @@ class VanillaCrossAttention(nn.Module):
         """
         x_norm = self.norm(x, emb)
         xf_norm = self.xf_norm(xf, emb)
-        y = self.attention(x_norm, xf_norm, xf_norm,
-                           attn_mask=None,
-                           key_padding_mask=key_padding_mask,
-                           need_weights=False)[0]
+        y = self.attention(
+            x_norm,
+            xf_norm,
+            xf_norm,
+            attn_mask=None,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )[0]
         return y
 
 
