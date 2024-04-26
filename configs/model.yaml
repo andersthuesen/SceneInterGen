@@ -2,11 +2,11 @@ NAME: InterGen
 NUM_LAYERS: 8
 NUM_HEADS: 8
 DROPOUT: 0.1
-INPUT_DIM: 417 # 3 translation + 24 * 3*2 rotations + 45x3 joints + 45x3 vels
+INPUT_DIM: 291 # 3 translation + 24 * 3*2 rotations + 24*3 joints + 24x3 vels
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
-CHECKPOINT: checkpoints/intergen.ckpt
+CHECKPOINT: checkpoints/IG-S-8/model/epoch=9-step=3100.ckpt
 
 DIFFUSION_STEPS: 1000
 BETA_SCHEDULER: cosine

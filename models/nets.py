@@ -100,7 +100,6 @@ class InterDenoiser(nn.Module):
         dropout=0.1,
         activation="gelu",
         cfg_weight=0.0,
-        **kargs
     ):
         super().__init__()
 
@@ -114,6 +113,7 @@ class InterDenoiser(nn.Module):
         self.activation = activation
         self.input_feats = num_features
         self.bias = bias
+        self.max_num_people = max_num_people
 
         self.emb_pos = PositionalEncoding(self.latent_dim, dropout=0)
         self.emb_t = TimestepEmbedder(self.latent_dim, self.emb_pos)
@@ -165,8 +165,8 @@ class InterDenoiser(nn.Module):
         motion: torch.Tensor,
         timesteps: torch.Tensor,
         # Conditioning
-        classes: torch.Tensor,
-        actions: torch.Tensor,
+        classes: Optional[torch.Tensor] = None,
+        actions: Optional[torch.Tensor] = None,
         # Mask
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -177,29 +177,36 @@ class InterDenoiser(nn.Module):
             # Embed position
             + self.emb_pos.pe[:T, :][None, None, :, :]
             # Embed identity (Generate a random "id" for each person)
-            + self.emb_id(torch.randperm(P, device=motion.device))[None, :, None, :]
-            # Embed class
-            + self.emb_class(classes)[:, :, None, :]
-            # Embed action
-            + self.emb_action(actions)
+            + self.emb_id(
+                torch.randperm(self.max_num_people, device=motion.device)[:P]
+            )[None, :, None, :]
         )
 
+        if classes is not None:
+            motion_emb += self.emb_class(classes)[:, :, None, :]
+
+        if actions is not None:
+            motion_emb += self.emb_action(actions)
+
+        # Prepare for transformer
+        motion_emb_flat = rearrange(motion_emb, "B P T D -> B (P T) D")
+
         # Embed diffusion timestep
-        t_emb = self.emb_t(timesteps)[:, None, None, :]
+        t_emb = self.emb_t(timesteps)[:, None, :]
 
         # Prepend the timestep embedding to the motion embedding
-        motion_emb = torch.cat((t_emb.repeat(1, P, 1, 1), motion_emb), dim=2)
-
-        motion_emb_flat = rearrange(motion_emb, "B P T D -> B (P T) D")
+        motion_emb_flat = torch.cat((t_emb, motion_emb_flat), dim=1)
 
         # Apply transformer
         out_flat = self.transformer(
             motion_emb_flat, src_key_padding_mask=~mask if mask is not None else None
         )
 
-        out = rearrange(out_flat, "B (P T) D -> B P T D", P=P)
         # Remove the timestep embedding
-        out = out[:, :, 1:]
+        out_flat = out_flat[:, 1:]
+
+        # Rearrange back to the original shape
+        out = rearrange(out_flat, "B (P T) D -> B P T D", P=P)
 
         return self.unemb_motion(out)
 
@@ -253,26 +260,16 @@ class InterDiffusion(nn.Module):
         )
         self.sampler = create_named_schedule_sampler(self.sampler, self.diffusion)
 
-    def mask_cond(self, cond, cond_mask_prob=0.1, force_mask=False):
-        bs = cond.shape[0]
-        if force_mask:
-            return torch.zeros_like(cond)
-        elif cond_mask_prob > 0.0:
-            mask = torch.bernoulli(
-                torch.ones(bs, device=cond.device) * cond_mask_prob
-            ).view(
-                [bs] + [1] * len(cond.shape[1:])
-            )  # 1-> use null_cond, 0-> use real cond
-            return cond * (1.0 - mask), (1.0 - mask)
-        else:
-            return cond, None
+    def mask_cond(self, cond: torch.Tensor, mask_prob=0.1):
+        return cond * (torch.randn(cond.shape, device=cond.device) < mask_prob)
 
     def compute_loss(self, batch):
         x_start = batch["motion"]
 
         mask = batch["mask"]
-        classes = batch["classes"]
-        actions = batch["actions"]
+
+        classes = self.mask_cond(batch["classes"])
+        actions = self.mask_cond(batch["actions"])
 
         pose_mask = batch["pose_mask"]
         vel_mask = batch["vel_mask"]
@@ -285,15 +282,16 @@ class InterDiffusion(nn.Module):
             mask=mask & pose_mask,
             vel_mask=vel_mask,
             t_bar=self.cfg.T_BAR,
-            model_kwargs={"classes": classes, "actions": actions},
+            model_kwargs={
+                "classes": classes,
+                "actions": actions,
+            },
         )
         return output
 
     def forward(self, batch):
-        cond = batch["cond"]
-        # x_start = batch["motions"]
-        B = cond.shape[0]
-        T = batch["motion_lens"][0]
+        classes = batch["classes"]
+        actions = batch["actions"]
 
         timestep_respacing = self.sampling_strategy
         self.diffusion_test = MotionDiffusion(
@@ -309,13 +307,12 @@ class InterDiffusion(nn.Module):
         self.cfg_model = ClassifierFreeSampleModel(self.net, self.cfg_weight)
         output = self.diffusion_test.ddim_sample_loop(
             self.cfg_model,
-            (B, T, self.nfeats * 2),
+            actions.shape + (self.nfeats,),
             clip_denoised=False,
             progress=True,
             model_kwargs={
-                "mask": None,
-                "cond": cond,
+                "classes": classes,
+                "actions": actions,
             },
-            x_start=None,
         )
         return {"output": output}

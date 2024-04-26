@@ -1,12 +1,10 @@
 import os
 import math
-import json
 import torch
 import pickle
 from torch.utils.data import Dataset
-from typing import Callable, TypeVar, Union, Tuple, List, OrderedDict
+from typing import Callable, TypeVar, Tuple, List
 import common.data_types as data_types
-from common.data_types import DynamicPrediction, DynamicPredictions
 from matching import MatchedTracks
 from smplx import SMPLLayer
 
@@ -34,49 +32,23 @@ ACTIONS = [
 ]
 
 
-TETON_TO_SMPL = {
-    0: 24,  # "nose",
-    1: 25,  # "right_eye",
-    2: 26,  # "left_eye",
-    3: 27,  # "right_ear",
-    4: 28,  # "left_ear",
-    # 5: 17, #"right_shoulder",
-    # 6: 16, #"left_shoulder",
-    7: 19,  # "right_elbow",
-    8: 18,  # "left_elbow",
-    9: 21,  # "right_wrist",
-    10: 20,  # "left_wrist",
-    # 11: "right_pinky_knuckle",
-    # 12: "left_pinky_knuckle",
-    # 13: "right_index_knuckle",
-    # 14: "left_index_knuckle",
-    # 15: "right_thumb_knuckle",
-    # 16: "left_thumb_knuckle",
-    # 17: 2, #"right_hip",
-    # 18: 1, #"left_hip",
-    19: 5,  # "right_knee",
-    20: 4,  # "left_knee",
-    21: 34,  # "right_ankle",
-    22: 31,  # "left_ankle",
-    23: 34,  # "right_heel",
-    24: 31,  # "left_heel",
-    25: 32,  # "right_foot_index",
-    26: 29,  # "left_foot_index"
-}
-
-
-KEYPOINTS_SHAPE = (27, 2)
-
-
-SMPL_DIMS = ((3,), (3, 3), (23, 3, 3))
+SMPL_DIMS = (
+    (3,),  # Global translation
+    (3, 3),  # Global orientation
+    (23, 3, 3),  # Pose
+)
 SMPL_SIZES = tuple(math.prod(feat) for feat in SMPL_DIMS)
 SMPL_SIZE = sum(SMPL_SIZES)
 
 
-FEATURE_DIMS = SMPL_DIMS
+SMPL_JOINTS_DIMS = ((24, 3),)
+SMPL_JOINTS_SIZES = tuple(math.prod(feat) for feat in SMPL_JOINTS_DIMS)
+SMPL_JOINTS_SIZE = sum(SMPL_JOINTS_SIZES)
 
-FEATURE_SIZES = tuple(math.prod(feat) for feat in FEATURE_DIMS)
-FEATURE_SIZE = sum(FEATURE_SIZES)
+
+SMPL_6D_DIMS = ((3,), (3, 2), (23, 3, 2))
+SMPL_6D_SIZES = tuple(math.prod(feat) for feat in SMPL_6D_DIMS)
+SMPL_6D_SIZE = sum(SMPL_6D_SIZES)
 
 
 class TetonPoseAnnotationsDataset(Dataset):
@@ -134,7 +106,7 @@ class TetonPoseAnnotationsDataset(Dataset):
 
         num_frames = max_frame_id - min_frame_id + 1
 
-        motion = torch.zeros(num_people, num_frames, FEATURE_SIZE)
+        motion = torch.zeros(num_people, num_frames, SMPL_SIZE)
         mask = torch.zeros(num_people, num_frames, dtype=torch.bool)
         classes = torch.zeros(num_people, dtype=torch.long)
         actions = torch.zeros(num_people, num_frames, dtype=torch.long)
@@ -177,11 +149,6 @@ class TetonPoseAnnotationsDataset(Dataset):
         return out
 
 
-SMPL_JOINTS_DIMS = ((45, 3),)
-SMPL_JOINTS_SIZES = tuple(math.prod(feat) for feat in SMPL_JOINTS_DIMS)
-SMPL_JOINTS_SIZE = sum(SMPL_JOINTS_SIZES)
-
-
 class AppendSMPLJoints:
     def __init__(self, smpl: SMPLLayer):
         self.smpl = smpl
@@ -189,18 +156,25 @@ class AppendSMPLJoints:
     def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
         motions, *rest = data
         translation, global_orient, body_pose = torch.split(
-            motions.view(-1, FEATURE_SIZE),
-            FEATURE_SIZES,
+            motions.view(-1, SMPL_SIZE),
+            SMPL_SIZES,
             dim=-1,
         )
 
         out = self.smpl.forward(
-            global_orient=global_orient, body_pose=body_pose, transl=translation
+            global_orient=global_orient,
+            body_pose=body_pose,
+            transl=translation,
+            return_verts=False,
+            return_full_pose=False,
         )
 
-        # Concatenate SMPL joints to the end of the motion tensor
+        # Append SMPL joints to the end of the motion tensor
         return (
-            torch.cat((motions, out.joints.view(*motions.shape[:-1], -1)), dim=-1),
+            torch.cat(
+                (motions, out.joints[..., :24, :].view(*motions.shape[:-1], -1)),
+                dim=-1,
+            ),
             *rest,
         )
 
@@ -246,11 +220,6 @@ class AppendJointVelocities:
             pose_masks,
             joint_vel_masks,
         )
-
-
-SMPL_6D_DIMS = ((3,), (3, 2), (23, 3, 2))
-SMPL_6D_SIZES = tuple(math.prod(feat) for feat in SMPL_6D_DIMS)
-SMPL_6D_SIZE = sum(SMPL_6D_SIZES)
 
 
 class SMPL6D:

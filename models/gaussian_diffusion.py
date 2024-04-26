@@ -15,6 +15,7 @@ import torch.distributed as dist
 import numpy as np
 
 from datasets.teton import SMPL_6D_SIZES, SMPL_JOINTS_SIZES, SMPL_SIZES
+from models.smpl import SMPL_SKELETON
 from utils.utils import *
 from utils.plot_script import *
 
@@ -980,7 +981,6 @@ class GaussianDiffusion:
         cond_fn_with_grad=False,
         dump_steps=None,
         const_noise=False,
-        x_start=None,
     ):
         """
         Generate samples from the model using DDIM.
@@ -993,28 +993,24 @@ class GaussianDiffusion:
             raise NotImplementedError()
 
         # final = []
-        for i, sample in enumerate(
-            self.ddim_sample_loop_progressive(
-                model,
-                shape,
-                noise=noise,
-                clip_denoised=clip_denoised,
-                denoised_fn=denoised_fn,
-                cond_fn=cond_fn,
-                model_kwargs=model_kwargs,
-                device=device,
-                progress=progress,
-                eta=eta,
-                skip_timesteps=skip_timesteps,
-                init_image=init_image,
-                randomize_class=randomize_class,
-                cond_fn_with_grad=cond_fn_with_grad,
-                x_start=x_start,
-            )
+        for sample in self.ddim_sample_loop_progressive(
+            model,
+            shape,
+            noise=noise,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            cond_fn=cond_fn,
+            model_kwargs=model_kwargs,
+            device=device,
+            progress=progress,
+            eta=eta,
+            skip_timesteps=skip_timesteps,
+            init_image=init_image,
+            randomize_class=randomize_class,
+            cond_fn_with_grad=cond_fn_with_grad,
         ):
             pass
-            # final.append(sample["pred_xstart"])
-            # return torch.cat(final, dim=0)
+
         return sample["pred_xstart"]
 
     def ddim_sample_loop_progressive(
@@ -1033,7 +1029,6 @@ class GaussianDiffusion:
         init_image=None,
         randomize_class=False,
         cond_fn_with_grad=False,
-        x_start=None,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -1073,16 +1068,14 @@ class GaussianDiffusion:
                     size=model_kwargs["y"].shape,
                     device=model_kwargs["y"].device,
                 )
-            if x_start is not None:
-                B, T, D = img.shape
-                img[:, :, [0, 2]] = x_start[:, :T, [0, 2]]
-                img[:, :, [262, 264]] = x_start[:, :T, [262, 264]]
+
             with th.no_grad():
                 sample_fn = (
                     self.ddim_sample_with_grad
                     if cond_fn_with_grad
                     else self.ddim_sample
                 )
+
                 out = sample_fn(
                     model,
                     img,
@@ -1384,33 +1377,122 @@ class MotionDiffusion(GaussianDiffusion):
     def training_losses(self, model, mask, vel_mask, t_bar, *args, **kwargs):
         items = super().training_losses(self._wrap_model(model), *args, **kwargs)
 
-        pred = items["pred"]
         target = items["target"]
+        pred = items["pred"]
+        t = kwargs["t"]
 
-        SIZES = (*SMPL_6D_SIZES, *SMPL_JOINTS_SIZES, *SMPL_JOINTS_SIZES)
+        t_mask = t <= t_bar
 
-        *_, pred_joints, _ = pred.split(SIZES, dim=-1)
-        pred_joints = pred_joints.reshape(*pred_joints.shape[:-1], -1, 3)
-        # Compute velocities from joints
-        pred_vels = pred_joints[:, :, 1:] - pred_joints[:, :, :-1]
+        # Split out the data
+        SIZES = SMPL_6D_SIZES + SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES
 
-        *_, tgt_joints, tgt_vels = target.split(SIZES, dim=-1)
-        tgt_joints = tgt_joints.reshape(*tgt_joints.shape[:-1], -1, 3)
-        tgt_vels = tgt_vels.reshape(*tgt_vels.shape[:-1], -1, 3)[:, :, 1:]
+        tgt_smpl_trans, tgt_smpl_rot, tgt_smpl_pose, tgt_joints, tgt_joint_vels = (
+            target.split(SIZES, dim=-1)
+        )
+        tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
+        tgt_joint_vels = tgt_joint_vels.view(target.shape[:-1] + (-1, 3))
+
+        pred_smpl_trans, pred_smpl_rot, pred_smpl_pose, pred_joints, pred_joint_vels = (
+            pred.split(SIZES, dim=-1)
+        )
+        pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
+        pred_joint_vels = pred_joint_vels.view(pred.shape[:-1] + (-1, 3))
+
+        # Compute derivations
+        a, b = zip(*SMPL_SKELETON)
+
+        tgt_bone_lengths = torch.norm(
+            tgt_joints[:, :, :, a] - tgt_joints[:, :, :, b], dim=-1
+        )
+
+        pred_bone_lengths = torch.norm(
+            pred_joints[:, :, :, a] - pred_joints[:, :, :, b], dim=-1
+        )
+
+        # Compute losses
+        smpl_trans_loss = torch.mean(
+            mask * torch.mean((pred_smpl_trans - tgt_smpl_trans) ** 2, dim=-1)
+        )
+        smpl_rot_loss = torch.mean(
+            mask * torch.mean((pred_smpl_rot - tgt_smpl_rot) ** 2, dim=-1)
+        )
+        smpl_pose_loss = torch.mean(
+            mask * torch.mean((pred_smpl_pose - tgt_smpl_pose) ** 2, dim=-1)
+        )
 
         joint_loss = torch.mean(
             mask * torch.mean((pred_joints - tgt_joints) ** 2, dim=(-1, -2))
         )
 
-        vel_loss = torch.mean(
-            vel_mask[:, :, 1:] * torch.mean((pred_vels - tgt_vels) ** 2, dim=(-1, -2))
+        joint_vel_loss = torch.mean(
+            vel_mask
+            * torch.mean((pred_joint_vels - tgt_joint_vels) ** 2, dim=(-1, -2)),
+            dim=(-1, -2),
         )
 
-        total_loss = joint_loss + vel_loss
+        bone_length_loss = torch.mean(
+            mask * torch.mean((pred_bone_lengths - tgt_bone_lengths) ** 2, dim=-1),
+            dim=(-1, -2),
+        )
+
+        B, P, T, S, *_ = tgt_joints.shape
+
+        # Compute pairwise distances
+        tgt_pairwise_mask = torch.zeros(
+            B, P * (P - 1) // 2, T, dtype=torch.bool, device=mask.device
+        )
+        tgt_pairwise_dist = torch.zeros(
+            B, P * (P - 1) // 2, T, S, device=tgt_joints.device
+        )
+        pred_pairwise_dist = torch.zeros(
+            B, P * (P - 1) // 2, T, S, device=pred_joints.device
+        )
+
+        idx = 0
+        for i in range(P):
+            for j in range(P):
+                # Skip self and symmetric pairs
+                if j <= i:
+                    continue
+
+                tgt_pairwise_mask[:, idx] = mask[:, i] & mask[:, j]
+                tgt_pairwise_dist[:, idx] = torch.norm(
+                    tgt_joints[:, i] - tgt_joints[:, j], dim=-1
+                )
+                pred_pairwise_dist[:, idx] = torch.norm(
+                    pred_joints[:, i] - pred_joints[:, j], dim=-1
+                )
+                idx += 1
+
+        # Define what is close enough
+        tgt_pairwise_close_mask = (
+            torch.norm(tgt_pairwise_dist, dim=-1) > 0
+        )  # TODO: FIX THIS
+        pairwise_mask = tgt_pairwise_mask & tgt_pairwise_close_mask
+        pairwise_dist_loss = torch.mean(
+            pairwise_mask
+            * torch.mean((pred_pairwise_dist - tgt_pairwise_dist) ** 2, dim=-1),
+            dim=(-1, -2),
+        )
+
+        smpl_loss = smpl_trans_loss + smpl_rot_loss + smpl_pose_loss
+        simple_loss = smpl_loss + joint_loss
+        reg_loss = joint_vel_loss + bone_length_loss + pairwise_dist_loss
+
+        # Mask out regularization losses after t_bar
+        total_loss = simple_loss + torch.mean(t_mask * reg_loss)
 
         losses = {
+            "smpl_trans_loss": smpl_trans_loss,
+            "smpl_rot_loss": smpl_rot_loss,
+            "smpl_pose_loss": smpl_pose_loss,
+            "smpl_loss": smpl_loss,
             "joint_loss": joint_loss,
-            "vel_loss": vel_loss,
+            "joint_vel_loss": joint_vel_loss.mean(),
+            "bone_length_loss": bone_length_loss.mean(),
+            "pairwise_dist_loss": pairwise_dist_loss.mean(),
+            "reg_loss": reg_loss.mean(),
+            "simple_loss": simple_loss,
             "total": total_loss,
         }
 

@@ -1,5 +1,5 @@
 from torch import nn
-from models import *
+from models.nets import InterDiffusion
 
 
 class InterGen(nn.Module):
