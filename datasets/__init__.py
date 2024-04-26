@@ -1,14 +1,26 @@
 import lightning.pytorch as pl
 import torch
 from .interhuman import InterHumanDataset
+from .teton import (
+    TetonPoseAnnotationsDataset,
+    AppendSMPLJoints,
+    AppendJointVelocities,
+    SMPL6D,
+    collate_pose_annotations,
+)
+
+from transforms.normalization import Normalize
+
+from torchvision.transforms import Compose
+
 from datasets.evaluator import (
-    EvaluatorModelWrapper,
     EvaluationDataset,
     get_dataset_motion_loader,
     get_motion_loader,
 )
 
-# from .dataloader import build_dataloader
+import smplx
+
 
 __all__ = [
     "InterHumanDataset",
@@ -50,12 +62,30 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
+        self.smpl = smplx.SMPLLayer(
+            model_path=self.cfg.SMPL_MODEL_PATH,
+        )
+
     def setup(self, stage=None):
         """
         Create train and validation datasets
         """
         if self.cfg.NAME == "interhuman":
             self.train_dataset = InterHumanDataset(self.cfg)
+        elif self.cfg.NAME == "teton":
+            self.train_dataset = TetonPoseAnnotationsDataset(
+                root_path=self.cfg.DATA_ROOT,
+                transform=Compose(
+                    [
+                        AppendSMPLJoints(self.smpl),
+                        AppendJointVelocities(),
+                        SMPL6D(),
+                        Normalize(
+                            means_path=self.cfg.MEANS_PATH, stds_path=self.cfg.STDS_PATH
+                        ),
+                    ]
+                ),
+            )
         else:
             raise NotImplementedError
 
@@ -70,4 +100,5 @@ class DataModule(pl.LightningDataModule):
             pin_memory=False,
             shuffle=True,
             drop_last=True,
+            collate_fn=collate_pose_annotations if self.cfg.NAME == "teton" else None,
         )

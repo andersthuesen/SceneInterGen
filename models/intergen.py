@@ -9,19 +9,6 @@ class InterGen(nn.Module):
         self.latent_dim = cfg.LATENT_DIM
         self.decoder = InterDiffusion(cfg, sampling_strategy=cfg.STRATEGY)
 
-        self.clipTransEncoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=768,
-                nhead=8,
-                dim_feedforward=2048,
-                dropout=0.1,
-                activation="gelu",
-                batch_first=True,
-            ),
-            num_layers=2,
-        )
-        self.clip_ln = nn.LayerNorm(768)
-
     def compute_loss(self, batch):
         losses = self.decoder.compute_loss(batch)
         return losses["total"], losses

@@ -32,7 +32,6 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        # pe = pe.unsqueeze(0)#.transpose(0, 1)
 
         self.register_buffer("pe", pe)
 
@@ -55,7 +54,7 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(time_embed_dim, time_embed_dim),
         )
 
-    def forward(self, timesteps):
+    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
         return self.time_embed(self.sequence_pos_encoder.pe[timesteps])
 
 

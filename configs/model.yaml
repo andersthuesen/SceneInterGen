@@ -2,7 +2,7 @@ NAME: InterGen
 NUM_LAYERS: 8
 NUM_HEADS: 8
 DROPOUT: 0.1
-INPUT_DIM: 262
+INPUT_DIM: 417 # 3 translation + 24 * 3*2 rotations + 45x3 joints + 45x3 vels
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
@@ -15,10 +15,11 @@ SAMPLER: uniform
 MOTION_REP: global
 FINETUNE: False
 
-TEXT_ENCODER: clip
 T_BAR: 700
 
 CONTROL: text
 STRATEGY: ddim50
 CFG_WEIGHT: 3.5
 
+NUM_ACTIONS: 12
+NUM_CLASSES: 3

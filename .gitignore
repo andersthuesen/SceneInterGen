@@ -6,3 +6,6 @@ venv
 evaluation_*
 cache
 eval_model
+means.pt
+stds.pt
+weights/smpl

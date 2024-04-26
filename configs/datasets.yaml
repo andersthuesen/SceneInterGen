@@ -5,6 +5,16 @@ interhuman:
     MODE: train
     CACHE: True
 
+teton:
+    NAME: teton
+    DATA_ROOT: ../OneRepoToRuleThemAll/data/teton/train
+    SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
+    MOTION_REP: global
+    MODE: train
+    CACHE: True
+    MEANS_PATH: means.pt
+    STDS_PATH: stds.pt
+
 interhuman_val:
     NAME: interhuman
     DATA_ROOT: ./data/interhuman_processed

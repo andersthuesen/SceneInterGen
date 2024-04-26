@@ -1,7 +1,4 @@
 import os
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 import torch
 import lightning.pytorch as pl
@@ -58,17 +55,15 @@ class LitTrainModel(pl.LightningModule):
         return self._configure_optim()
 
     def forward(self, batch_data):
-        name, text, motion1, motion2, motion_lens = batch_data
-        motion1 = motion1.detach().float()  # .to(self.device)
-        motion2 = motion2.detach().float()  # .to(self.device)
-        motions = torch.cat([motion1, motion2], dim=-1)
-
-        B, T = motion1.shape[:2]
+        motion, mask, classes, actions, pose_mask, vel_mask = batch_data
 
         batch = OrderedDict({})
-        batch["text"] = text
-        batch["motions"] = motions.reshape(B, T, -1).type(torch.float32)
-        batch["motion_lens"] = motion_lens.long()
+        batch["motion"] = motion
+        batch["mask"] = mask
+        batch["classes"] = classes
+        batch["actions"] = actions
+        batch["pose_mask"] = pose_mask
+        batch["vel_mask"] = vel_mask
 
         loss, loss_logs = self.model(batch)
         return loss, loss_logs
@@ -142,11 +137,40 @@ if __name__ == "__main__":
     print(os.getcwd())
     model_cfg = get_config("configs/model.yaml")
     train_cfg = get_config("configs/train.yaml")
-    data_cfg = get_config("configs/datasets.yaml").interhuman
+    data_cfg = get_config("configs/datasets.yaml").teton
 
     datamodule = DataModule(
         data_cfg, train_cfg.TRAIN.BATCH_SIZE, train_cfg.TRAIN.NUM_WORKERS
     )
+
+    # Use this code to calculate mean and std
+    """
+    datamodule.setup()
+
+    means = []
+    stds = []
+
+    from tqdm import tqdm
+
+    for i, (motion, mask, *_) in tqdm(
+        enumerate(datamodule.train_dataloader()), total=100
+    ):
+
+        masked_motion = motion[mask]
+        means.append(masked_motion.mean(dim=0))
+        stds.append(masked_motion.std(dim=0))
+
+        if i > 100:
+            break
+
+    mean = torch.stack(means).mean(dim=0)
+    std = torch.stack(stds).mean(dim=0)
+
+    # Save mean and std
+    torch.save(mean, "means.pt")
+    torch.save(std, "stds.pt")
+    """
+
     model = build_models(model_cfg)
 
     if train_cfg.TRAIN.RESUME:
@@ -166,7 +190,7 @@ if __name__ == "__main__":
         devices="auto",
         accelerator="gpu",
         max_epochs=train_cfg.TRAIN.EPOCH,
-        strategy=DDPStrategy(find_unused_parameters=True),
+        strategy=DDPStrategy(find_unused_parameters=False),
         precision=32,
         callbacks=[checkpoint_callback],
     )

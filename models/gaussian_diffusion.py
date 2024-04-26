@@ -13,12 +13,14 @@ import torch.distributed as dist
 
 # This code is based on https://github.com/openai/guided-diffusion
 import numpy as np
-import torch as th
 
+from datasets.teton import SMPL_6D_SIZES, SMPL_JOINTS_SIZES, SMPL_SIZES
 from utils.utils import *
 from utils.plot_script import *
 
 from models.losses import InterLoss, GeometricLoss
+
+import torch.nn.functional as F
 
 
 def create_named_schedule_sampler(name, diffusion):
@@ -1129,9 +1131,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(
-        self, model, x_start, t, model_kwargs=None, noise=None, control=False
-    ):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
 
@@ -1149,13 +1149,6 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)
-
-        ######################### fine-tuning for control #################################
-        if control:
-            B, T, D = x_t.shape
-            x_t[:, :, [0, 2]] = x_start[:, :T, [0, 2]]
-            x_t[:, :, [262, 264]] = x_start[:, :T, [262, 264]]
-        ###################################################################################
 
         terms = {}
 
@@ -1381,8 +1374,6 @@ class MotionDiffusion(GaussianDiffusion):
         # print(self.timestep_map)
         kwargs["betas"] = np.array(new_betas)
 
-        self.normalizer = MotionNormalizerTorch()
-
         super().__init__(**kwargs)
 
     def p_mean_variance(
@@ -1390,44 +1381,38 @@ class MotionDiffusion(GaussianDiffusion):
     ):  # pylint: disable=signature-differs
         return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
 
-    def training_losses(self, model, mask, t_bar, cond_mask, *args, **kwargs):
-        target = kwargs["x_start"]
-        B, T = target.shape[:-1]
-
-        target = target.reshape(B, T, 2, -1)
-        mask = mask.reshape(B, T, -1, 1)
-
-        target = self.normalizer.forward(target)
-
-        kwargs["x_start"] = target.reshape(B, T, -1)
+    def training_losses(self, model, mask, vel_mask, t_bar, *args, **kwargs):
         items = super().training_losses(self._wrap_model(model), *args, **kwargs)
-        prediction = items["pred"].reshape(B, T, 2, -1)
-        target = items["target"].reshape(B, T, 2, -1)
 
-        timestep_mask = (kwargs["t"] <= t_bar).float()  # * cond_mask[0, 0]
+        pred = items["pred"]
+        target = items["target"]
 
-        interloss_manager = InterLoss("l2", 22)
-        interloss_manager.forward(prediction, target, mask, timestep_mask)
+        SIZES = (*SMPL_6D_SIZES, *SMPL_JOINTS_SIZES, *SMPL_JOINTS_SIZES)
 
-        loss_a_manager = GeometricLoss("l2", 22, "A")
-        loss_a_manager.forward(
-            prediction[..., 0, :], target[..., 0, :], mask[..., 0, :], timestep_mask
+        *_, pred_joints, _ = pred.split(SIZES, dim=-1)
+        pred_joints = pred_joints.reshape(*pred_joints.shape[:-1], -1, 3)
+        # Compute velocities from joints
+        pred_vels = pred_joints[:, :, 1:] - pred_joints[:, :, :-1]
+
+        *_, tgt_joints, tgt_vels = target.split(SIZES, dim=-1)
+        tgt_joints = tgt_joints.reshape(*tgt_joints.shape[:-1], -1, 3)
+        tgt_vels = tgt_vels.reshape(*tgt_vels.shape[:-1], -1, 3)[:, :, 1:]
+
+        joint_loss = torch.mean(
+            mask * torch.mean((pred_joints - tgt_joints) ** 2, dim=(-1, -2))
         )
 
-        loss_b_manager = GeometricLoss("l2", 22, "B")
-        loss_b_manager.forward(
-            prediction[..., 1, :], target[..., 1, :], mask[..., 0, :], timestep_mask
+        vel_loss = torch.mean(
+            vel_mask[:, :, 1:] * torch.mean((pred_vels - tgt_vels) ** 2, dim=(-1, -2))
         )
 
-        losses = {}
-        losses.update(loss_a_manager.losses)
-        losses.update(loss_b_manager.losses)
-        losses.update(interloss_manager.losses)
-        losses["total"] = (
-            loss_a_manager.losses["A"]
-            + loss_b_manager.losses["B"]
-            + interloss_manager.losses["total"]
-        )
+        total_loss = joint_loss + vel_loss
+
+        losses = {
+            "joint_loss": joint_loss,
+            "vel_loss": vel_loss,
+            "total": total_loss,
+        }
 
         return losses
 
