@@ -127,9 +127,9 @@ class LitTrainModel(pl.LightningModule):
         return
 
 
-def build_models(cfg):
+def build_models(cfg, mean, std):
     if cfg.NAME == "InterGen":
-        model = InterGen(cfg)
+        model = InterGen(cfg, mean, std)
     return model
 
 
@@ -139,11 +139,14 @@ if __name__ == "__main__":
     train_cfg = get_config("configs/train.yaml")
     data_cfg = get_config("configs/datasets.yaml").teton
 
+    mean = torch.load(data_cfg.MEAN_PATH)
+    std = torch.load(data_cfg.STD_PATH)
+
     datamodule = DataModule(
-        data_cfg, train_cfg.TRAIN.BATCH_SIZE, train_cfg.TRAIN.NUM_WORKERS
+        data_cfg, train_cfg.TRAIN.BATCH_SIZE, train_cfg.TRAIN.NUM_WORKERS, mean, std
     )
 
-    model = build_models(model_cfg)
+    model = build_models(model_cfg, mean, std)
 
     if train_cfg.TRAIN.RESUME:
         ckpt = torch.load(train_cfg.TRAIN.RESUME, map_location="cpu")

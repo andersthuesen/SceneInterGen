@@ -3,6 +3,7 @@ from datasets.teton import (
     ACTIONS,
     PERSON_CLASSES,
     SMPL_6D_SIZE,
+    SMPL_6D_SIZES,
     SMPL_JOINTS_DIMS,
     SMPL_JOINTS_SIZE,
 )
@@ -18,6 +19,8 @@ from models.smpl import SMPL_SKELETON
 from utils.plot_script import *
 from utils.preprocess import *
 from utils import paramUtil
+
+from geometry import rot6d_to_rotmat
 
 from models.intergen import InterGen
 
@@ -67,9 +70,9 @@ class LitGenModel(L.LightningModule):
         return self.model.forward_test(batch)
 
 
-def build_models(cfg):
+def build_models(cfg, mean, std):
     if cfg.NAME == "InterGen":
-        model = InterGen(cfg)
+        model = InterGen(cfg, mean, std)
     return model
 
 
@@ -78,7 +81,10 @@ if __name__ == "__main__":
     model_cfg = get_config("configs/model.yaml")
     infer_cfg = get_config("configs/infer.yaml")
 
-    model = build_models(model_cfg)
+    mean = torch.load("mean.pt")
+    std = torch.load("std.pt")
+
+    model = build_models(model_cfg, mean, std)
 
     if model_cfg.CHECKPOINT:
         ckpt = torch.load(model_cfg.CHECKPOINT, map_location="cpu")
@@ -91,17 +97,20 @@ if __name__ == "__main__":
     device = torch.device("cuda:0")
     litmodel = LitGenModel(model, infer_cfg).to(device)
 
-    means = torch.load("means.pt", map_location=device)
-    stds = torch.load("stds.pt", map_location=device)
-
     classes = torch.zeros(1, 2, dtype=torch.long, device=device)
 
     classes[:, 0] = PERSON_CLASSES.index("patient") + 1
     classes[:, 1] = PERSON_CLASSES.index("medical_staff") + 1
+    # classes[:, 2] = PERSON_CLASSES.index("medical_staff") + 1
 
-    actions = torch.zeros(1, 2, 100, dtype=torch.long, device=device)
-    actions[:, 0] = ACTIONS.index("laying_in_bed") + 1
-    actions[:, 1] = ACTIONS.index("standing_on_floor") + 1
+    actions = torch.zeros(1, 2, 200, dtype=torch.long, device=device)
+    actions[:, 0, :40] = ACTIONS.index("laying_in_bed") + 1
+    actions[:, 0, 40:] = ACTIONS.index("sitting_in_walker") + 1
+    # actions[:, 0, 30:50] = ACTIONS.index("sitting_on_bed_edge") + 1
+    # actions[:, 0, 50:] = ACTIONS.index("standing_on_floor") + 1
+
+    actions[:, 1, :] = ACTIONS.index("standing_on_floor") + 1
+    # actions[:, 2, :] = ACTIONS.index("standing_on_floor") + 1
 
     out = litmodel.generate_loop(
         {
@@ -112,25 +121,50 @@ if __name__ == "__main__":
 
     output = out["output"]
 
-    output = output * stds + means
+    output = output * std.to(device) + mean.to(device)
 
     smpl_6d, joints, joint_vels = output.split(
         [SMPL_6D_SIZE, SMPL_JOINTS_SIZE, SMPL_JOINTS_SIZE], dim=-1
     )
 
+    # smpl_trans, smpl_6d_rot, smpl_6d_pose = smpl_6d.split(SMPL_6D_SIZES, dim=-1)
+
+    # smpl_rot = rot6d_to_rotmat(smpl_6d_rot.view(output.shape[:-1] + (3, 2)))
+
+    # smpl_pose = rot6d_to_rotmat(smpl_6d_pose.view(output.shape[:-1] + (23, 3, 2)))
+
+    # # print(smpl_trans.shape, smpl_rot.shape, smpl_pose.shape)
+
+    # motion = torch.cat(
+    #     [
+    #         smpl_trans,
+    #         smpl_rot.view(output.shape[:-1] + (-1,)),
+    #         smpl_pose.view(output.shape[:-1] + (-1,)),
+    #     ],
+    #     dim=-1,
+    # )
+
+    # torch.save(motion, "results/motion.pt")
+
+    # exit(0)
+
     joints = joints.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
+    joint_vels = joint_vels.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
+
+    #
+    # joints = joints[..., :1, :, :] + joint_vels.cumsum(dim=2)
 
     import matplotlib.pyplot as plt
     import time
 
-    min_x = joints[..., :22, 0].min().item()
-    max_x = joints[..., :22, 0].max().item()
+    min_x = joints[..., :24, 0].min().item()
+    max_x = joints[..., :24, 0].max().item()
 
-    min_y = joints[..., :22, 1].min().item()
-    max_y = joints[..., :22, 1].max().item()
+    min_y = joints[..., :24, 1].min().item()
+    max_y = joints[..., :24, 1].max().item()
 
-    min_z = joints[..., :22, 2].min().item()
-    max_z = joints[..., :22, 2].max().item()
+    min_z = joints[..., :24, 2].min().item()
+    max_z = joints[..., :24, 2].max().item()
 
     # server = viser.ViserServer()
 

@@ -21,7 +21,10 @@ from utils.plot_script import *
 
 from models.losses import InterLoss, GeometricLoss
 
+from geometry import rot6d_to_rotmat
+
 import torch.nn.functional as F
+import smplx
 
 
 def create_named_schedule_sampler(name, diffusion):
@@ -1374,11 +1377,23 @@ class MotionDiffusion(GaussianDiffusion):
     ):  # pylint: disable=signature-differs
         return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
 
-    def training_losses(self, model, mask, vel_mask, t_bar, *args, **kwargs):
+    def training_losses(
+        self,
+        model,
+        smpl: smplx.SMPLLayer,
+        mask,
+        vel_mask,
+        t_bar,
+        mean: torch.Tensor,
+        std: torch.Tensor,
+        *args,
+        **kwargs,
+    ):
         items = super().training_losses(self._wrap_model(model), *args, **kwargs)
 
-        target = items["target"]
-        pred = items["pred"]
+        # Denormalize the data
+        target = items["target"] * std + mean
+        pred = items["pred"] * std + mean
         t = kwargs["t"]
 
         t_mask = t <= t_bar
@@ -1386,17 +1401,31 @@ class MotionDiffusion(GaussianDiffusion):
         # Split out the data
         SIZES = SMPL_6D_SIZES + SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES
 
-        tgt_smpl_trans, tgt_smpl_rot, tgt_smpl_pose, tgt_joints, tgt_joint_vels = (
-            target.split(SIZES, dim=-1)
-        )
+        (
+            tgt_smpl_trans,
+            tgt_smpl_rot_6d,
+            tgt_smpl_pose_6d,
+            tgt_joints,
+            tgt_joint_vels,
+        ) = target.split(SIZES, dim=-1)
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
         tgt_joint_vels = tgt_joint_vels.view(target.shape[:-1] + (-1, 3))
+        tgt_smpl_rot_6d = tgt_smpl_rot_6d.view(target.shape[:-1] + (3, 2))
+        tgt_smpl_pose_6d = tgt_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
-        pred_smpl_trans, pred_smpl_rot, pred_smpl_pose, pred_joints, pred_joint_vels = (
-            pred.split(SIZES, dim=-1)
-        )
+        (
+            pred_smpl_trans,
+            pred_smpl_rot_6d,
+            pred_smpl_pose_6d,
+            pred_joints,
+            pred_joint_vels,
+        ) = pred.split(SIZES, dim=-1)
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
         pred_joint_vels = pred_joint_vels.view(pred.shape[:-1] + (-1, 3))
+        pred_smpl_rot_6d = pred_smpl_rot_6d.view(target.shape[:-1] + (3, 2))
+        pred_smpl_pose_6d = pred_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
+        pred_smpl_rot = rot6d_to_rotmat(pred_smpl_rot_6d)
+        pred_smpl_pose = rot6d_to_rotmat(pred_smpl_pose_6d)
 
         # Compute derivations
         a, b = zip(*SMPL_SKELETON)
@@ -1414,11 +1443,21 @@ class MotionDiffusion(GaussianDiffusion):
             mask * torch.mean((pred_smpl_trans - tgt_smpl_trans) ** 2, dim=-1)
         )
         smpl_rot_loss = torch.mean(
-            mask * torch.mean((pred_smpl_rot - tgt_smpl_rot) ** 2, dim=-1)
+            mask * torch.mean((pred_smpl_rot_6d - tgt_smpl_rot_6d) ** 2, dim=(-1, -2))
         )
         smpl_pose_loss = torch.mean(
-            mask * torch.mean((pred_smpl_pose - tgt_smpl_pose) ** 2, dim=-1)
+            mask
+            * torch.mean((pred_smpl_pose_6d - tgt_smpl_pose_6d) ** 2, dim=(-1, -2, -3))
         )
+
+        # pred_smpl = smpl(
+        #     transl=pred_smpl_trans.view(-1, 3),
+        #     global_orient=pred_smpl_rot.view(-1, 3, 3),
+        #     body_pose=pred_smpl_pose.view(-1, 23, 3, 3),
+        #     return_verts=False,  # Don't need the vertices
+        # )
+
+        # pred_smpl_joints = pred_smpl.joints.view(pred.shape[:-1] + (-1, 3))
 
         joint_loss = torch.mean(
             mask * torch.mean((pred_joints - tgt_joints) ** 2, dim=(-1, -2))
@@ -1464,10 +1503,9 @@ class MotionDiffusion(GaussianDiffusion):
                 )
                 idx += 1
 
-        # Define what is close enough
-        tgt_pairwise_close_mask = (
-            torch.norm(tgt_pairwise_dist, dim=-1) > 0
-        )  # TODO: FIX THIS
+        # TODO: Define what is close enough
+        tgt_pairwise_close_mask = torch.norm(tgt_pairwise_dist, dim=-1) > 0
+
         pairwise_mask = tgt_pairwise_mask & tgt_pairwise_close_mask
         pairwise_dist_loss = torch.mean(
             pairwise_mask

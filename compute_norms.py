@@ -8,9 +8,7 @@ if __name__ == "__main__":
     train_cfg = get_config("configs/train.yaml")
     data_cfg = get_config("configs/datasets.yaml").teton
 
-    datamodule = DataModule(
-        data_cfg, train_cfg.TRAIN.BATCH_SIZE, train_cfg.TRAIN.NUM_WORKERS
-    )
+    datamodule = DataModule(data_cfg, 1, train_cfg.TRAIN.NUM_WORKERS)
 
     # Use this code to calculate mean and std
     datamodule.setup()
@@ -18,20 +16,23 @@ if __name__ == "__main__":
     means = []
     stds = []
 
-    total = 100
-
-    for i, (motion, mask, *_) in tqdm(
-        enumerate(datamodule.train_dataloader()),
-        total=total,
-        desc="Computing mean and std",
+    for motion, mask, *_ in tqdm(
+        datamodule.train_dataloader(), desc="Computing mean and std"
     ):
+        pass
 
-        masked_motion = motion[mask]
-        means.append(masked_motion.mean(dim=0))
-        stds.append(masked_motion.std(dim=0))
+    exit(0)
+    # masked_motion = motion[mask]
+    # mean = masked_motion.mean(dim=0)
+    # std = masked_motion.std(dim=0)
 
-        if i > total:
-            break
+    # if mean.isnan().any():
+    #     print("mean is nan")
+    # elif std.isnan().any():
+    #     print("std is nan")
+    # else:
+    #     means.append(mean)
+    #     stds.append(std)
 
     mean = torch.stack(means).mean(dim=0)
     std = torch.stack(stds).mean(dim=0)

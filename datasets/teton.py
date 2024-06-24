@@ -52,9 +52,10 @@ SMPL_6D_SIZE = sum(SMPL_6D_SIZES)
 
 
 class TetonPoseAnnotationsDataset(Dataset):
-    def __init__(self, root_path: str, transform: Callable = None):
+    def __init__(self, root_path: str, transform: Callable = None, cache=False):
         super(TetonPoseAnnotationsDataset, self).__init__()
         self.transform = transform
+        self.cache = cache
         self.paths = [
             os.path.join(root_path, department_dir, device_dir, date_dir, datetime_dir)
             for department_dir in os.listdir(root_path)
@@ -84,6 +85,9 @@ class TetonPoseAnnotationsDataset(Dataset):
         self, index
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         base_path = self.paths[index]
+
+        if self.cache and os.path.exists(os.path.join(base_path, "cache.pkl")):
+            return pickle.load(open(os.path.join(base_path, "cache.pkl"), "rb"))
 
         matched_path = os.path.join(base_path, "matched.pkl")
 
@@ -144,7 +148,10 @@ class TetonPoseAnnotationsDataset(Dataset):
         out = motion, mask, classes, actions, pose_mask
 
         if self.transform:
-            return self.transform(out)
+            out = self.transform(out)
+
+        if self.cache:
+            pickle.dump(out, open(os.path.join(base_path, "cache.pkl"), "wb"))
 
         return out
 

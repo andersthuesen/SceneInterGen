@@ -12,8 +12,8 @@ teton:
     MOTION_REP: global
     MODE: train
     CACHE: True
-    MEANS_PATH: means.pt
-    STDS_PATH: stds.pt
+    MEAN_PATH: mean.pt
+    STD_PATH: std.pt
 
 interhuman_val:
     NAME: interhuman

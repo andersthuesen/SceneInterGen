@@ -50,7 +50,9 @@ def build_loader(cfg, data_cfg):
 
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, cfg, batch_size, num_workers):
+    def __init__(
+        self, cfg, batch_size, num_workers, mean: torch.Tensor, std: torch.Tensor
+    ):
         """
         Initialize LightningDataModule for ProHMR training
         Args:
@@ -66,6 +68,9 @@ class DataModule(pl.LightningDataModule):
             model_path=self.cfg.SMPL_MODEL_PATH,
         )
 
+        self.mean = mean
+        self.std = std
+
     def setup(self, stage=None):
         """
         Create train and validation datasets
@@ -80,11 +85,10 @@ class DataModule(pl.LightningDataModule):
                         AppendSMPLJoints(self.smpl),
                         AppendJointVelocities(),
                         SMPL6D(),
-                        Normalize(
-                            means_path=self.cfg.MEANS_PATH, stds_path=self.cfg.STDS_PATH
-                        ),
+                        Normalize(mean=self.mean, std=self.std),
                     ]
                 ),
+                cache=self.cfg.CACHE,
             )
         else:
             raise NotImplementedError

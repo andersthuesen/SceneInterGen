@@ -4,6 +4,7 @@ from models.utils import *
 from models.cfg_sampler import ClassifierFreeSampleModel
 from models.blocks import *
 from utils.utils import *
+from smplx import SMPLLayer
 
 from models.gaussian_diffusion import (
     MotionDiffusion,
@@ -260,10 +261,12 @@ class InterDiffusion(nn.Module):
         )
         self.sampler = create_named_schedule_sampler(self.sampler, self.diffusion)
 
+        self.smpl = SMPLLayer(model_path=cfg.SMPL_MODEL_PATH)
+
     def mask_cond(self, cond: torch.Tensor, mask_prob=0.1):
         return cond * (torch.randn(cond.shape, device=cond.device) < mask_prob)
 
-    def compute_loss(self, batch):
+    def compute_loss(self, batch, mean: torch.Tensor, std: torch.Tensor):
         x_start = batch["motion"]
 
         mask = batch["mask"]
@@ -277,11 +280,14 @@ class InterDiffusion(nn.Module):
         t, _ = self.sampler.sample(x_start.shape[0], x_start.device)
         output = self.diffusion.training_losses(
             model=self.net,
+            smpl=self.smpl,
             x_start=x_start,
             t=t,
             mask=mask & pose_mask,
             vel_mask=vel_mask,
             t_bar=self.cfg.T_BAR,
+            mean=mean,
+            std=std,
             model_kwargs={
                 "classes": classes,
                 "actions": actions,
