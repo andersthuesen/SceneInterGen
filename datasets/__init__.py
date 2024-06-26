@@ -1,11 +1,10 @@
 import lightning.pytorch as pl
 import torch
 from .interhuman import InterHumanDataset
+
 from .teton import (
-    TetonPoseAnnotationsDataset,
-    AppendSMPLJoints,
-    AppendJointVelocities,
-    SMPL6D,
+    TetonDataset,
+    ToNonCannonical,
     collate_pose_annotations,
 )
 
@@ -18,6 +17,8 @@ from datasets.evaluator import (
     get_dataset_motion_loader,
     get_motion_loader,
 )
+
+from typing import Optional
 
 import smplx
 
@@ -51,7 +52,13 @@ def build_loader(cfg, data_cfg):
 
 class DataModule(pl.LightningDataModule):
     def __init__(
-        self, cfg, batch_size, num_workers, mean: torch.Tensor, std: torch.Tensor
+        self,
+        cfg,
+        batch_size,
+        num_workers,
+        smpl: smplx.SMPLLayer,
+        mean: Optional[torch.Tensor] = None,
+        std: Optional[torch.Tensor] = None,
     ):
         """
         Initialize LightningDataModule for ProHMR training
@@ -64,10 +71,7 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-        self.smpl = smplx.SMPLLayer(
-            model_path=self.cfg.SMPL_MODEL_PATH,
-        )
-
+        self.smpl = smpl
         self.mean = mean
         self.std = std
 
@@ -75,23 +79,23 @@ class DataModule(pl.LightningDataModule):
         """
         Create train and validation datasets
         """
-        if self.cfg.NAME == "interhuman":
-            self.train_dataset = InterHumanDataset(self.cfg)
-        elif self.cfg.NAME == "teton":
-            self.train_dataset = TetonPoseAnnotationsDataset(
-                root_path=self.cfg.DATA_ROOT,
-                transform=Compose(
-                    [
-                        AppendSMPLJoints(self.smpl),
-                        AppendJointVelocities(),
-                        SMPL6D(),
-                        Normalize(mean=self.mean, std=self.std),
-                    ]
+        datasets = []
+        for dataset_name, dataset_cfg in self.cfg.items():
+            print(f"Loading {dataset_name}")
+            dataset = TetonDataset(
+                root_path=dataset_cfg.DATA_ROOT,
+                transform=ToNonCannonical(self.smpl),
+                augment=(
+                    Normalize(self.mean, self.std)
+                    if self.mean is not None and self.std is not None
+                    else None
                 ),
-                cache=self.cfg.CACHE,
+                motion_filename=dataset_cfg.MOTION_FILENAME,
+                cache=dataset_cfg.CACHE,
             )
-        else:
-            raise NotImplementedError
+            datasets.append(dataset)
+
+        self.train_dataset = torch.utils.data.ConcatDataset(datasets)
 
     def train_dataloader(self):
         """
@@ -104,5 +108,5 @@ class DataModule(pl.LightningDataModule):
             pin_memory=False,
             shuffle=True,
             drop_last=True,
-            collate_fn=collate_pose_annotations if self.cfg.NAME == "teton" else None,
+            collate_fn=collate_pose_annotations,
         )
