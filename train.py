@@ -17,6 +17,8 @@ from lightning.pytorch.strategies import DDPStrategy
 
 torch.set_float32_matmul_precision("medium")
 
+import smplx
+
 
 class LitTrainModel(pl.LightningModule):
     def __init__(self, model, cfg):
@@ -55,15 +57,27 @@ class LitTrainModel(pl.LightningModule):
         return self._configure_optim()
 
     def forward(self, batch_data):
-        motion, mask, classes, actions, pose_mask, vel_mask = batch_data
+        (
+            motion,
+            mask,
+            classes,
+            actions,
+            object_points,
+            description_tokens,
+            description_embs,
+        ) = batch_data
 
-        batch = OrderedDict({})
-        batch["motion"] = motion
-        batch["mask"] = mask
-        batch["classes"] = classes
-        batch["actions"] = actions
-        batch["pose_mask"] = pose_mask
-        batch["vel_mask"] = vel_mask
+        batch = OrderedDict(
+            {
+                "motion": motion,
+                "mask": mask,
+                "classes": classes,
+                "actions": actions,
+                "object_points": object_points,
+                "description_tokens": description_tokens,
+                "description_embs": description_embs,
+            }
+        )
 
         loss, loss_logs = self.model(batch)
         return loss, loss_logs
@@ -137,13 +151,21 @@ if __name__ == "__main__":
     print(os.getcwd())
     model_cfg = get_config("configs/model.yaml")
     train_cfg = get_config("configs/train.yaml")
-    data_cfg = get_config("configs/datasets.yaml").teton
+    data_cfg = get_config("configs/datasets.yaml")
 
-    mean = torch.load(data_cfg.MEAN_PATH)
-    std = torch.load(data_cfg.STD_PATH)
+    smpl = smplx.SMPLLayer(
+        model_path=model_cfg.SMPL_MODEL_PATH,
+    )
+    mean = torch.load("mean.pt")
+    std = torch.load("std.pt")
 
     datamodule = DataModule(
-        data_cfg, train_cfg.TRAIN.BATCH_SIZE, train_cfg.TRAIN.NUM_WORKERS, mean, std
+        data_cfg,
+        train_cfg.TRAIN.BATCH_SIZE,
+        train_cfg.TRAIN.NUM_WORKERS,
+        smpl,
+        mean,
+        std,
     )
 
     model = build_models(model_cfg, mean, std)
@@ -165,7 +187,7 @@ if __name__ == "__main__":
         devices="auto",
         accelerator="gpu",
         max_epochs=train_cfg.TRAIN.EPOCH,
-        strategy=DDPStrategy(find_unused_parameters=False),
+        strategy=DDPStrategy(find_unused_parameters=True),
         precision=32,
         callbacks=[checkpoint_callback],
     )
