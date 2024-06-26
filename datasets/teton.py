@@ -69,7 +69,7 @@ class TetonDataset(Dataset):
         path_cache_path = os.path.join(root_path, "path_cache.pkl")
         self.paths = (
             pickle.load(open(path_cache_path, "rb"))
-            if True and os.path.exists(path_cache_path)
+            if cache and os.path.exists(path_cache_path)
             else [
                 path
                 for path, _, files in tqdm(os.walk(root_path), desc="Loading dataset")
@@ -98,8 +98,8 @@ class TetonDataset(Dataset):
 
         motion = torch.load(motion_path).float()
 
-        visible, motion = motion.split([1, SMPL_SIZE], dim=-1)
-        visible = visible.squeeze(-1).bool()
+        motion_mask, motion = motion.split([1, SMPL_SIZE], dim=-1)
+        motion_mask = motion_mask.squeeze(-1).bool()
 
         classes_path = os.path.join(base_path, "class.pt")
         actions_path = os.path.join(base_path, "action.pt")
@@ -126,12 +126,21 @@ class TetonDataset(Dataset):
             else None
         )
 
+        object_points_mask = (
+            torch.ones(
+                object_points.shape[0], dtype=torch.bool, device=object_points.device
+            )
+            if object_points is not None
+            else None
+        )
+
         out = (
             motion,
-            visible,
+            motion_mask,
             classes,
             actions,
             object_points,
+            object_points_mask,
             description_tokens,
             description_embs,
         )
@@ -194,8 +203,8 @@ class ToNonCannonical:
 def collate_pose_annotations(
     batch: List[
         Tuple[
-            torch.Tensor,  # mask
             torch.Tensor,  # motion
+            torch.Tensor,  # mask
             Optional[torch.Tensor],  # classes
             Optional[torch.Tensor],  # actions
             Optional[torch.Tensor],  # object_points

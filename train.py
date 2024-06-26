@@ -59,10 +59,11 @@ class LitTrainModel(pl.LightningModule):
     def forward(self, batch_data):
         (
             motion,
-            mask,
+            motion_mask,
             classes,
             actions,
             object_points,
+            object_points_mask,
             description_tokens,
             description_embs,
         ) = batch_data
@@ -70,10 +71,11 @@ class LitTrainModel(pl.LightningModule):
         batch = OrderedDict(
             {
                 "motion": motion,
-                "mask": mask,
+                "motion_mask": motion_mask,
                 "classes": classes,
                 "actions": actions,
                 "object_points": object_points,
+                "object_points_mask": object_points_mask,
                 "description_tokens": description_tokens,
                 "description_embs": description_embs,
             }

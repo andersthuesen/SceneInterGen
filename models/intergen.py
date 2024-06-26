@@ -71,7 +71,7 @@ class InterGen(nn.Module):
             (cond_mask * cond_flat.reshape(*embs.shape[:2], cond_flat.shape[-1])).sum(
                 dim=1
             )
-            / num_descs
+            / (num_descs + 1e-7)
         )
 
         desc_mask = num_descs.squeeze(-1) > 0

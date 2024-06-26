@@ -1,30 +1,17 @@
 interhuman:
     NAME: interhuman
-    DATA_ROOT: ./data/interhuman_processed
-    MOTION_REP: global
-    MODE: train
+    DATA_ROOT: /data/anders/data/interhuman/subset/
+    MOTION_FILENAME: motion.pt
     CACHE: True
 
 teton:
     NAME: teton
-    DATA_ROOT: ../OneRepoToRuleThemAll/data/teton/train
-    SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
-    MOTION_REP: global
-    MODE: train
-    CACHE: True
-    MEAN_PATH: mean.pt
-    STD_PATH: std.pt
-
-interhuman_val:
-    NAME: interhuman
-    DATA_ROOT: ./data/interhuman_processed
-    MOTION_REP: global
-    MODE: val
+    DATA_ROOT: /data/anders/data/teton_data/train
+    MOTION_FILENAME: optimized_motion_transformed.pt
     CACHE: True
 
-interhuman_test:
-    NAME: interhuman
-    DATA_ROOT: ./data/interhuman_processed
-    MOTION_REP: global
-    MODE: test
+humanml3d:
+    NAME: humanml3d
+    DATA_ROOT: /data/anders/data/humanml3d
+    MOTION_FILENAME: motion.pt
     CACHE: True
