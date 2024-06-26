@@ -187,7 +187,7 @@ class InterDenoiser(nn.Module):
             motion_emb += self.emb_class(classes)[:, :, None, :]
 
         if actions is not None:
-            motion_emb += self.emb_action(actions)
+            motion_emb[..., : actions.shape[-1], :] += self.emb_action(actions)
 
         # Prepare for transformer
         motion_emb_flat = rearrange(motion_emb, "B P T D -> B (P T) D")
@@ -264,6 +264,8 @@ class InterDiffusion(nn.Module):
         self.smpl = SMPLLayer(model_path=cfg.SMPL_MODEL_PATH)
 
     def mask_cond(self, cond: torch.Tensor, mask_prob=0.1):
+        if cond is None:
+            return None
         return cond * (torch.randn(cond.shape, device=cond.device) < mask_prob)
 
     def compute_loss(self, batch, mean: torch.Tensor, std: torch.Tensor):
@@ -274,17 +276,13 @@ class InterDiffusion(nn.Module):
         classes = self.mask_cond(batch["classes"])
         actions = self.mask_cond(batch["actions"])
 
-        pose_mask = batch["pose_mask"]
-        vel_mask = batch["vel_mask"]
-
         t, _ = self.sampler.sample(x_start.shape[0], x_start.device)
         output = self.diffusion.training_losses(
             model=self.net,
             smpl=self.smpl,
             x_start=x_start,
             t=t,
-            mask=mask & pose_mask,
-            vel_mask=vel_mask,
+            mask=mask,
             t_bar=self.cfg.T_BAR,
             mean=mean,
             std=std,
