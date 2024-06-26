@@ -14,16 +14,11 @@ import torch.distributed as dist
 # This code is based on https://github.com/openai/guided-diffusion
 import numpy as np
 
-from datasets.teton import SMPL_6D_SIZES, SMPL_JOINTS_SIZES, SMPL_SIZES
+from datasets.teton import SMPL_JOINTS_SIZES
 from models.smpl import SMPL_SKELETON
 from utils.utils import *
 from utils.plot_script import *
 
-from models.losses import InterLoss, GeometricLoss
-
-from geometry import rot6d_to_rotmat
-
-import torch.nn.functional as F
 import smplx
 
 
@@ -1382,7 +1377,6 @@ class MotionDiffusion(GaussianDiffusion):
         model,
         smpl: smplx.SMPLLayer,
         mask,
-        vel_mask,
         t_bar,
         mean: torch.Tensor,
         std: torch.Tensor,
@@ -1399,33 +1393,26 @@ class MotionDiffusion(GaussianDiffusion):
         t_mask = t <= t_bar
 
         # Split out the data
-        SIZES = SMPL_6D_SIZES + SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES
+        #       joints              joint_vels          6D body_pose
+        SIZES = SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES + (23 * 3 * 2,)
 
         (
-            tgt_smpl_trans,
-            tgt_smpl_rot_6d,
-            tgt_smpl_pose_6d,
             tgt_joints,
             tgt_joint_vels,
+            tgt_smpl_pose_6d,
         ) = target.split(SIZES, dim=-1)
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
         tgt_joint_vels = tgt_joint_vels.view(target.shape[:-1] + (-1, 3))
-        tgt_smpl_rot_6d = tgt_smpl_rot_6d.view(target.shape[:-1] + (3, 2))
         tgt_smpl_pose_6d = tgt_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
         (
-            pred_smpl_trans,
-            pred_smpl_rot_6d,
-            pred_smpl_pose_6d,
             pred_joints,
             pred_joint_vels,
+            pred_smpl_pose_6d,
         ) = pred.split(SIZES, dim=-1)
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
         pred_joint_vels = pred_joint_vels.view(pred.shape[:-1] + (-1, 3))
-        pred_smpl_rot_6d = pred_smpl_rot_6d.view(target.shape[:-1] + (3, 2))
         pred_smpl_pose_6d = pred_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
-        pred_smpl_rot = rot6d_to_rotmat(pred_smpl_rot_6d)
-        pred_smpl_pose = rot6d_to_rotmat(pred_smpl_pose_6d)
 
         # Compute derivations
         a, b = zip(*SMPL_SKELETON)
@@ -1439,92 +1426,115 @@ class MotionDiffusion(GaussianDiffusion):
         )
 
         # Compute losses
-        smpl_trans_loss = torch.mean(
-            mask * torch.mean((pred_smpl_trans - tgt_smpl_trans) ** 2, dim=-1)
-        )
-        smpl_rot_loss = torch.mean(
-            mask * torch.mean((pred_smpl_rot_6d - tgt_smpl_rot_6d) ** 2, dim=(-1, -2))
-        )
-        smpl_pose_loss = torch.mean(
-            mask
-            * torch.mean((pred_smpl_pose_6d - tgt_smpl_pose_6d) ** 2, dim=(-1, -2, -3))
+        pose_loss = torch.mean(
+            (
+                mask
+                * torch.nn.functional.mse_loss(
+                    pred_smpl_pose_6d, tgt_smpl_pose_6d, reduction="none"
+                ).sum(dim=(-1, -2, -3))
+            ).sum(dim=(-1, -2))
+            / (mask.sum(dim=(-1, -2)) + 1e-7)
         )
 
-        # pred_smpl = smpl(
-        #     transl=pred_smpl_trans.view(-1, 3),
-        #     global_orient=pred_smpl_rot.view(-1, 3, 3),
-        #     body_pose=pred_smpl_pose.view(-1, 23, 3, 3),
-        #     return_verts=False,  # Don't need the vertices
-        # )
+        joint_loss = torch.mean(  # Mean loss pr. batch
+            (
+                mask
+                * torch.nn.functional.mse_loss(
+                    pred_joints, tgt_joints, reduction="none"
+                )
+                .sum(dim=-1)  # Sum each coordinate
+                .mean(dim=-1)  # Mean over each joint
+            ).sum(dim=(-1, -2))
+            / (mask.sum(dim=(-1, -2)) + 1e-7)  # Normalize by number of valid
+        )
 
-        # pred_smpl_joints = pred_smpl.joints.view(pred.shape[:-1] + (-1, 3))
-
-        joint_loss = torch.mean(
-            mask * torch.mean((pred_joints - tgt_joints) ** 2, dim=(-1, -2))
+        # Compute vel mask from mask
+        vel_mask = torch.cat(
+            (torch.ones_like(mask[..., :1, :]), mask[..., 1:, :] & mask[..., :-1, :]),
+            dim=-2,
         )
 
         joint_vel_loss = torch.mean(
-            vel_mask
-            * torch.mean((pred_joint_vels - tgt_joint_vels) ** 2, dim=(-1, -2)),
-            dim=(-1, -2),
+            (
+                vel_mask
+                * torch.nn.functional.mse_loss(
+                    pred_joint_vels, tgt_joint_vels, reduction="none"
+                )
+                .sum(dim=-1)
+                .mean(dim=-1)
+            ).sum(dim=(-1, -2))
+            / (vel_mask.sum(dim=(-1, -2)) + 1e-7)
         )
 
         bone_length_loss = torch.mean(
-            mask * torch.mean((pred_bone_lengths - tgt_bone_lengths) ** 2, dim=-1),
-            dim=(-1, -2),
+            (
+                mask
+                * torch.nn.functional.mse_loss(
+                    pred_bone_lengths, tgt_bone_lengths, reduction="none"
+                ).mean(dim=-1)
+            ).sum(dim=(-1, -2))
+            / (mask.sum(dim=(-1, -2)) + 1e-7)
         )
 
         B, P, T, S, *_ = tgt_joints.shape
+        pairwise_dist_loss = torch.zeros(B, device=tgt_joints.device)
+        if P > 1:
 
-        # Compute pairwise distances
-        tgt_pairwise_mask = torch.zeros(
-            B, P * (P - 1) // 2, T, dtype=torch.bool, device=mask.device
-        )
-        tgt_pairwise_dist = torch.zeros(
-            B, P * (P - 1) // 2, T, S, device=tgt_joints.device
-        )
-        pred_pairwise_dist = torch.zeros(
-            B, P * (P - 1) // 2, T, S, device=pred_joints.device
-        )
+            # Compute pairwise distances
+            tgt_pairwise_mask = torch.zeros(
+                B, P * (P - 1) // 2, T, dtype=torch.bool, device=mask.device
+            )
+            tgt_pairwise_dist = torch.zeros(
+                B, P * (P - 1) // 2, T, S, S, device=tgt_joints.device
+            )
+            pred_pairwise_dist = torch.zeros(
+                B, P * (P - 1) // 2, T, S, S, device=pred_joints.device
+            )
 
-        idx = 0
-        for i in range(P):
-            for j in range(P):
-                # Skip self and symmetric pairs
-                if j <= i:
-                    continue
+            idx = 0
+            for i in range(P):
+                for j in range(P):
+                    # Skip self and symmetric pairs
+                    if j <= i:
+                        continue
 
-                tgt_pairwise_mask[:, idx] = mask[:, i] & mask[:, j]
-                tgt_pairwise_dist[:, idx] = torch.norm(
-                    tgt_joints[:, i] - tgt_joints[:, j], dim=-1
-                )
-                pred_pairwise_dist[:, idx] = torch.norm(
-                    pred_joints[:, i] - pred_joints[:, j], dim=-1
-                )
-                idx += 1
+                    tgt_pairwise_mask[:, idx] = mask[:, i] & mask[:, j]
 
-        # TODO: Define what is close enough
-        tgt_pairwise_close_mask = torch.norm(tgt_pairwise_dist, dim=-1) > 0
+                    # Compute pairwise bipartite distances between joints
+                    tgt_pairwise_dist[:, idx] = torch.cdist(
+                        tgt_joints[:, i], tgt_joints[:, j], p=2
+                    )
 
-        pairwise_mask = tgt_pairwise_mask & tgt_pairwise_close_mask
-        pairwise_dist_loss = torch.mean(
-            pairwise_mask
-            * torch.mean((pred_pairwise_dist - tgt_pairwise_dist) ** 2, dim=-1),
-            dim=(-1, -2),
-        )
+                    pred_pairwise_dist[:, idx] = torch.cdist(
+                        pred_joints[:, i], pred_joints[:, j], p=2
+                    )
 
-        smpl_loss = smpl_trans_loss + smpl_rot_loss + smpl_pose_loss
-        simple_loss = smpl_loss + joint_loss
-        reg_loss = joint_vel_loss + bone_length_loss + pairwise_dist_loss
+                    idx += 1
+
+            # Joints are within 1 meter of each other
+            pred_pairwise_close_mask = pred_pairwise_dist < 1
+
+            pairwise_dist_loss = (
+                tgt_pairwise_mask  # Only if multiple people are present
+                * (
+                    pred_pairwise_close_mask  # Only consider joints within 1 meter
+                    * torch.nn.functional.mse_loss(
+                        pred_pairwise_dist, tgt_pairwise_dist, reduction="none"
+                    )
+                ).sum(dim=(-1, -2))
+                / (pred_pairwise_close_mask.sum(dim=(-1, -2)) + 1e-7)
+            ).sum(dim=(-1, -2)) / (tgt_pairwise_mask.sum(dim=(-1, -2)) + 1e-7)
+
+        # Should be weighted by lambda_t
+        simple_loss = pose_loss + joint_loss
+        # Lass weights from InterGen paper (missing RO loss as it requires inverse kinematics)
+        reg_loss = 30 * joint_vel_loss + 10 * bone_length_loss + 3 * pairwise_dist_loss
 
         # Mask out regularization losses after t_bar
         total_loss = simple_loss + torch.mean(t_mask * reg_loss)
 
         losses = {
-            "smpl_trans_loss": smpl_trans_loss,
-            "smpl_rot_loss": smpl_rot_loss,
-            "smpl_pose_loss": smpl_pose_loss,
-            "smpl_loss": smpl_loss,
+            "pose_loss": pose_loss,
             "joint_loss": joint_loss,
             "joint_vel_loss": joint_vel_loss.mean(),
             "bone_length_loss": bone_length_loss.mean(),
