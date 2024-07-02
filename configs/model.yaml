@@ -6,7 +6,7 @@ INPUT_DIM: 282 # 24*3 joints + 24*3 velocities + 23*3*2 6D pose
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
-CHECKPOINT: checkpoints/IG-S-8/model/epoch=739-step=110260.ckpt
+CHECKPOINT: checkpoints/IG-S-8/model/epoch=1229-step=253380.ckpt
 SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
 
 DIFFUSION_STEPS: 1000

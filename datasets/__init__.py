@@ -5,6 +5,9 @@ from .interhuman import InterHumanDataset
 from .teton import (
     TetonDataset,
     ToNonCannonical,
+    RandomRotate,
+    RandomTranslate,
+    ChooseRandomDescription,
     collate_pose_annotations,
 )
 
@@ -86,9 +89,17 @@ class DataModule(pl.LightningDataModule):
                 root_path=dataset_cfg.DATA_ROOT,
                 transform=ToNonCannonical(self.smpl),
                 augment=(
-                    Normalize(self.mean, self.std)
-                    if self.mean is not None and self.std is not None
-                    else None
+                    Compose(
+                        [
+                            ChooseRandomDescription(),
+                            RandomTranslate(max_z=0),
+                            RandomRotate(),
+                            RandomTranslate(max_z=0),
+                        ]
+                        + [Normalize(self.mean, self.std)]
+                        if self.mean is not None and self.std is not None
+                        else []
+                    )
                 ),
                 motion_filename=dataset_cfg.MOTION_FILENAME,
                 cache=dataset_cfg.CACHE,

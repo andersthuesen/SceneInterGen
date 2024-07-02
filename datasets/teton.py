@@ -2,11 +2,13 @@ import os
 import math
 import torch
 import pickle
+import random
 from torch.utils.data import Dataset
 from typing import Callable, TypeVar, Tuple, List, Optional
 import common.data_types as data_types
-from matching import MatchedTracks
 from smplx import SMPLLayer
+
+from scipy.spatial.transform import Rotation as R
 
 import sys
 
@@ -50,6 +52,51 @@ SMPL_JOINTS_SIZE = sum(SMPL_JOINTS_SIZES)
 SMPL_6D_DIMS = ((3,), (3, 2), (23, 3, 2))
 SMPL_6D_SIZES = tuple(math.prod(feat) for feat in SMPL_6D_DIMS)
 SMPL_6D_SIZE = sum(SMPL_6D_SIZES)
+
+# Mapping from left to right joints
+SMPL_LEFT_RIGHT_MAP = [
+    (0, 0),
+    (1, 2),
+    (3, 3),
+    (4, 5),
+    (6, 6),
+    (7, 8),
+    (9, 9),
+    (10, 11),
+    (12, 12),
+    (13, 14),
+    (15, 15),
+    (16, 17),
+    (18, 19),
+    (20, 21),
+    (22, 23),
+]
+
+SMPL_POSE_FLIP = [
+    1,
+    0,
+    2,
+    4,
+    3,
+    5,
+    7,
+    6,
+    8,
+    10,
+    9,
+    11,
+    13,
+    12,
+    14,
+    16,
+    15,
+    18,
+    17,
+    20,
+    19,
+    22,
+    21,
+]
 
 
 class TetonDataset(Dataset):
@@ -200,6 +247,116 @@ class ToNonCannonical:
         return x, *rest
 
 
+class ChooseRandomDescription:
+    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
+        *rest, description_tokens, description_embs = data
+
+        if description_tokens is None or description_embs is None:
+            return *rest, None, None
+
+        # Choose random index
+        idx = random.randrange(0, len(description_tokens))
+        return *rest, description_tokens[idx], description_embs[idx]
+
+
+class RandomTranslate:
+    def __init__(self, max_x=0.5, max_y=0.5, max_z=0.0):
+        self.max_x = max_x
+        self.max_y = max_y
+        self.max_z = max_z
+
+    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
+        motion, motion_mask, classes, actions, object_points, *rest = data
+        joints, joint_vels, pose = motion.split(
+            (
+                SMPL_JOINTS_SIZE,
+                SMPL_JOINTS_SIZE,
+                SMPL_6D_SIZES[-1],  # 6D pose
+            ),
+            dim=-1,
+        )
+
+        joints = joints.view(joints.shape[:-1] + SMPL_JOINTS_DIMS[0])
+
+        # Translate the joints
+        translation = (torch.rand(3) * 2 - 1) * torch.tensor(
+            [self.max_x, self.max_y, self.max_z]
+        )
+
+        joints_translated = joints + translation
+        object_points_translated = (
+            (object_points + translation) if object_points is not None else None
+        )
+
+        motion_translated = torch.cat(
+            (
+                joints_translated.view(*motion.shape[:-1], -1),
+                joint_vels,
+                pose,
+            ),
+            dim=-1,
+        )
+
+        return (
+            motion_translated,
+            motion_mask,
+            classes,
+            actions,
+            object_points_translated,
+            *rest,
+        )
+
+
+class RandomRotate:
+    def __init__(self, max_angle=360):
+        self.max_angle = max_angle
+
+    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
+        motion, motion_mask, classes, actions, object_points, *rest = data
+        joints, joint_vels, pose = motion.split(
+            (
+                SMPL_JOINTS_SIZE,
+                SMPL_JOINTS_SIZE,
+                SMPL_6D_SIZES[-1],  # 6D pose
+            ),
+            dim=-1,
+        )
+
+        joints = joints.view(joints.shape[:-1] + SMPL_JOINTS_DIMS[0])
+        joint_vels = joint_vels.view(joint_vels.shape[:-1] + SMPL_JOINTS_DIMS[0])
+
+        # Rotate the joints
+        r = R.from_euler("z", torch.rand(1) * self.max_angle, degrees=True)
+        rotmat = r.as_matrix()[0]
+
+        joints_rotated = (joints @ rotmat.T).type(joints.dtype)
+        joint_vels_rotated = (joint_vels @ rotmat.T).type(joint_vels.dtype)
+
+        object_points_rotated = (
+            (object_points @ rotmat.T).type(object_points.dtype)
+            if object_points is not None
+            else None
+        )
+
+        motion_rotated = torch.cat(
+            (
+                joints_rotated.view(*motion.shape[:-1], -1),
+                joint_vels_rotated.view(*motion.shape[:-1], -1),
+                pose,
+            ),
+            dim=-1,
+        )
+
+        return (
+            motion_rotated,
+            motion_mask,
+            classes,
+            actions,
+            object_points_rotated,
+            *rest,
+        )
+
+
 def collate_pose_annotations(
     batch: List[
         Tuple[
@@ -214,7 +371,7 @@ def collate_pose_annotations(
     batch_size = len(batch)
 
     outs = []
-    for what, inpts in enumerate(zip(*batch)):
+    for inpts in zip(*batch):
         non_none_inpts = [inp for inp in inpts if inp is not None]
         if not non_none_inpts:
             outs.append(None)
@@ -232,10 +389,6 @@ def collate_pose_annotations(
                 continue
 
             out[i, *[slice(0, dim) for dim in inp.shape]] = inp
-
-        if out.isnan().any():
-            print(what, max_dims, out.shape)
-            raise ValueError("NaNs in input")
 
         outs.append(out)
 

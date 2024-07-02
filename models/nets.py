@@ -348,7 +348,7 @@ class InterDiffusion(nn.Module):
 
         self.smpl = SMPLLayer(model_path=cfg.SMPL_MODEL_PATH)
 
-    def mask_cond(
+    def batch_cond_mask(
         self, cond: Optional[torch.Tensor], mask_prob=0.1
     ) -> Optional[torch.Tensor]:
         # Mask out whole batch with 10% probability (classifier free guidance)
@@ -366,10 +366,12 @@ class InterDiffusion(nn.Module):
 
         motion_mask = batch["motion_mask"]
 
-        classes = self.mask_cond(batch["classes"])
-        actions = self.mask_cond(batch["actions"])
-        object_points_mask = self.mask_cond(batch["object_points_mask"])
-        description_mask = self.mask_cond(batch["description_mask"])
+        classes = self.batch_cond_mask(batch["classes"])
+        actions = self.batch_cond_mask(batch["actions"])
+        object_points = batch["object_points"]
+        object_points_mask = self.batch_cond_mask(batch["object_points_mask"])
+        description_emb = batch["description_emb"]
+        description_mask = self.batch_cond_mask(batch["description_mask"])
 
         t, _ = self.sampler.sample(x_start.shape[0], x_start.device)
         output = self.diffusion.training_losses(
@@ -385,9 +387,9 @@ class InterDiffusion(nn.Module):
                 "motion_mask": motion_mask,
                 "classes": classes,
                 "actions": actions,
-                "object_points": batch["object_points"],
+                "object_points": object_points,
                 "object_points_mask": object_points_mask,
-                "description_emb": batch["description_emb"],
+                "description_emb": description_emb,
                 "description_mask": description_mask,
             },
         )
@@ -417,6 +419,11 @@ class InterDiffusion(nn.Module):
             model_kwargs={
                 "classes": classes,
                 "actions": actions,
+                "object_points": batch["object_points"],
+                "object_points_mask": batch["object_points_mask"],
+                "description_emb": batch["description_emb"],
+                "description_mask": batch["description_mask"],
             },
         )
+
         return {"output": output}

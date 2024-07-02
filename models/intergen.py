@@ -45,39 +45,22 @@ class InterGen(nn.Module):
         return batch
 
     def text_process(self, batch):
-        tokens = batch["description_tokens"]
-        embs = batch["description_embs"]
+        tokens: torch.Tensor = batch["description_tokens"]
+        embs: torch.Tensor = batch["description_embs"]
 
-        # Merge batch and number of descriptions into one dimension
-        tokens_flat = tokens.reshape(-1, *tokens.shape[2:])
-        embs_flat = embs.reshape(-1, *embs.shape[2:])
+        if tokens is None or embs is None:
+            batch["description_mask"] = None
+            batch["description_emb"] = None
+            return batch
 
-        # Apply our transformer encoder
-        out_flat = self.clipTransEncoder(embs_flat)
-        out_flat = self.clip_ln(out_flat)
+        mask = tokens.max(dim=-1).values != 0
 
-        # Extract embedding for EOS tokens
-        cond_flat = out_flat[
-            torch.arange(out_flat.shape[0]),
-            # Find EOS token which should contain all information
-            tokens_flat.argmax(dim=-1),
-        ]
-
-        # # Find the average of the embeddings (mask out pure padding tokens)
-        cond_mask = tokens.max(dim=-1, keepdim=True).values > 0
-        num_descs = cond_mask.sum(dim=1)
-
-        cond = self.clip_ln(
-            (cond_mask * cond_flat.reshape(*embs.shape[:2], cond_flat.shape[-1])).sum(
-                dim=1
-            )
-            / (num_descs + 1e-7)
-        )
-
-        desc_mask = num_descs.squeeze(-1) > 0
+        emb = self.clipTransEncoder(embs)
+        emb = self.clip_ln(emb)
+        emb = emb[torch.arange(emb.size(0)), tokens.argmax(dim=-1)]
 
         # Update batch with new embeddings and masks
-        batch["description_mask"] = desc_mask
-        batch["description_emb"] = cond
+        batch["description_mask"] = mask
+        batch["description_emb"] = emb
 
         return batch

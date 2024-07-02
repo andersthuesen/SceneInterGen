@@ -143,14 +143,7 @@ class LitTrainModel(pl.LightningModule):
         return
 
 
-def build_models(cfg, mean, std):
-    if cfg.NAME == "InterGen":
-        model = InterGen(cfg, mean, std)
-    return model
-
-
 if __name__ == "__main__":
-    print(os.getcwd())
     model_cfg = get_config("configs/model.yaml")
     train_cfg = get_config("configs/train.yaml")
     data_cfg = get_config("configs/datasets.yaml")
@@ -170,15 +163,7 @@ if __name__ == "__main__":
         std,
     )
 
-    model = build_models(model_cfg, mean, std)
-
-    if train_cfg.TRAIN.RESUME:
-        ckpt = torch.load(train_cfg.TRAIN.RESUME, map_location="cpu")
-        for k in list(ckpt["state_dict"].keys()):
-            if "model" in k:
-                ckpt["state_dict"][k.replace("model.", "")] = ckpt["state_dict"].pop(k)
-        model.load_state_dict(ckpt["state_dict"], strict=True)
-        print("checkpoint state loaded!")
+    model = InterGen(model_cfg, mean, std)
     litmodel = LitTrainModel(model, train_cfg)
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
@@ -194,4 +179,4 @@ if __name__ == "__main__":
         callbacks=[checkpoint_callback],
     )
 
-    trainer.fit(model=litmodel, datamodule=datamodule)
+    trainer.fit(model=litmodel, datamodule=datamodule, ckpt_path=train_cfg.TRAIN.RESUME)

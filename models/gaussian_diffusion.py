@@ -19,7 +19,13 @@ from models.smpl import SMPL_SKELETON
 from utils.utils import *
 from utils.plot_script import *
 
+from torch.nn.functional import mse_loss
+
 import smplx
+
+
+def w_mean(p: torch.Tensor, v: torch.Tensor, dim=None, eps=1e-6):
+    return (p * v).sum(dim) / (v.sum(dim) + eps)
 
 
 def create_named_schedule_sampler(name, diffusion):
@@ -1398,20 +1404,20 @@ class MotionDiffusion(GaussianDiffusion):
 
         (
             tgt_joints,
-            tgt_joint_vels,
+            tgt_joint_vels_,
             tgt_smpl_pose_6d,
         ) = target.split(SIZES, dim=-1)
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
-        tgt_joint_vels = tgt_joint_vels.view(target.shape[:-1] + (-1, 3))
+        tgt_joint_vels_ = tgt_joint_vels_.view(target.shape[:-1] + (-1, 3))
         tgt_smpl_pose_6d = tgt_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
         (
             pred_joints,
-            pred_joint_vels,
+            pred_joint_vels_,
             pred_smpl_pose_6d,
         ) = pred.split(SIZES, dim=-1)
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
-        pred_joint_vels = pred_joint_vels.view(pred.shape[:-1] + (-1, 3))
+        pred_joint_vels_ = pred_joint_vels_.view(pred.shape[:-1] + (-1, 3))
         pred_smpl_pose_6d = pred_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
         # Compute derivations
@@ -1426,54 +1432,42 @@ class MotionDiffusion(GaussianDiffusion):
         )
 
         # Compute losses
-        pose_loss = torch.mean(
-            (
-                mask
-                * torch.nn.functional.mse_loss(
-                    pred_smpl_pose_6d, tgt_smpl_pose_6d, reduction="none"
-                ).sum(dim=(-1, -2, -3))
-            ).sum(dim=(-1, -2))
-            / (mask.sum(dim=(-1, -2)) + 1e-7)
+        pose_loss = w_mean(
+            mask,
+            mse_loss(pred_smpl_pose_6d, tgt_smpl_pose_6d, reduction="none")
+            .sum(dim=(-1, -2))  # Sum each coordinate
+            .mean(dim=-1),  # Mean over each joint
         )
 
-        joint_loss = torch.mean(  # Mean loss pr. batch
-            (
-                mask
-                * torch.nn.functional.mse_loss(
-                    pred_joints, tgt_joints, reduction="none"
-                )
-                .sum(dim=-1)  # Sum each coordinate
-                .mean(dim=-1)  # Mean over each joint
-            ).sum(dim=(-1, -2))
-            / (mask.sum(dim=(-1, -2)) + 1e-7)  # Normalize by number of valid
+        joint_loss = w_mean(
+            mask,
+            mse_loss(pred_joints, tgt_joints, reduction="none")
+            .sum(dim=-1)  # Sum each coordinate
+            .mean(dim=-1),  # Mean over each joint
         )
+
+        mpjpe = w_mean(mask, torch.norm(pred_joints - tgt_joints, dim=-1).mean(dim=-1))
 
         # Compute vel mask from mask
-        vel_mask = torch.cat(
-            (torch.ones_like(mask[..., :1, :]), mask[..., 1:, :] & mask[..., :-1, :]),
-            dim=-2,
+        vel_mask = mask[..., 1:] & mask[..., :-1]
+
+        tgt_joint_vels = tgt_joints[..., 1:, :, :] - tgt_joints[..., :-1, :, :]
+        pred_joint_vels = pred_joints[..., 1:, :, :] - pred_joints[..., :-1, :, :]
+
+        joint_vel_loss = w_mean(
+            vel_mask,
+            mse_loss(pred_joint_vels, tgt_joint_vels, reduction="none")
+            .sum(dim=-1)  # Sum each coordinate
+            .mean(dim=-1),  # Mean over each joint
+            dim=(-1, -2),
         )
 
-        joint_vel_loss = torch.mean(
-            (
-                vel_mask
-                * torch.nn.functional.mse_loss(
-                    pred_joint_vels, tgt_joint_vels, reduction="none"
-                )
-                .sum(dim=-1)
-                .mean(dim=-1)
-            ).sum(dim=(-1, -2))
-            / (vel_mask.sum(dim=(-1, -2)) + 1e-7)
-        )
-
-        bone_length_loss = torch.mean(
-            (
-                mask
-                * torch.nn.functional.mse_loss(
-                    pred_bone_lengths, tgt_bone_lengths, reduction="none"
-                ).mean(dim=-1)
-            ).sum(dim=(-1, -2))
-            / (mask.sum(dim=(-1, -2)) + 1e-7)
+        bone_length_loss = w_mean(
+            mask,
+            mse_loss(pred_bone_lengths, tgt_bone_lengths, reduction="none").mean(
+                dim=-1
+            ),  # Mean over each joint
+            dim=(-1, -2),
         )
 
         B, P, T, S, *_ = tgt_joints.shape
@@ -1514,32 +1508,41 @@ class MotionDiffusion(GaussianDiffusion):
             # Joints are within 1 meter of each other
             pred_pairwise_close_mask = pred_pairwise_dist < 1
 
-            pairwise_dist_loss = (
-                tgt_pairwise_mask  # Only if multiple people are present
-                * (
-                    pred_pairwise_close_mask  # Only consider joints within 1 meter
-                    * torch.nn.functional.mse_loss(
-                        pred_pairwise_dist, tgt_pairwise_dist, reduction="none"
-                    )
-                ).sum(dim=(-1, -2))
-                / (pred_pairwise_close_mask.sum(dim=(-1, -2)) + 1e-7)
-            ).sum(dim=(-1, -2)) / (tgt_pairwise_mask.sum(dim=(-1, -2)) + 1e-7)
+            pairwise_dist_loss = w_mean(
+                tgt_pairwise_mask,
+                w_mean(
+                    pred_pairwise_close_mask,
+                    mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
+                    dim=(-1, -2),
+                ),
+                dim=(-1, -2),
+            )
 
         # Should be weighted by lambda_t
-        simple_loss = pose_loss + joint_loss
-        # Lass weights from InterGen paper (missing RO loss as it requires inverse kinematics)
+        simple_loss = w_mean(
+            mask,
+            mse_loss(
+                items["pred"],
+                items["target"],
+                reduction="none",
+            ).mean(dim=-1),
+        )
+        # Loss weights from InterGen paper (missing RO loss as it requires inverse kinematics)
+        # We double the joint loss from 30 to 60 as InterGen sums the joint vel loss over two people
         reg_loss = 30 * joint_vel_loss + 10 * bone_length_loss + 3 * pairwise_dist_loss
 
         # Mask out regularization losses after t_bar
-        total_loss = simple_loss + torch.mean(t_mask * reg_loss)
+        weighted_reg_loss = w_mean(t_mask, reg_loss)
+        total_loss = simple_loss + weighted_reg_loss
 
         losses = {
             "pose_loss": pose_loss,
             "joint_loss": joint_loss,
-            "joint_vel_loss": joint_vel_loss.mean(),
-            "bone_length_loss": bone_length_loss.mean(),
-            "pairwise_dist_loss": pairwise_dist_loss.mean(),
-            "reg_loss": reg_loss.mean(),
+            "joint_vel_loss": w_mean(t_mask, joint_vel_loss),
+            "bone_length_loss": w_mean(t_mask, bone_length_loss),
+            "pairwise_dist_loss": w_mean(t_mask, pairwise_dist_loss),
+            "reg_loss": weighted_reg_loss,
+            "MPJPE": mpjpe,
             "simple_loss": simple_loss,
             "total": total_loss,
         }

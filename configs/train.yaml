@@ -12,7 +12,7 @@ TRAIN:
   LOG_STEPS: 10
   SAVE_STEPS: 20000
   SAVE_EPOCH: 10
-  RESUME: # checkpoints/IG-S-8/model/epoch=769-step=114730.ckpt
+  RESUME: checkpoints/IG-S-8/model/epoch=1219-step=251320.ckpt
   NUM_WORKERS: 16
   MODE: finetune
   LAST_EPOCH: 0
