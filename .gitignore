@@ -9,3 +9,4 @@ eval_model
 mean.pt
 std.pt
 weights/smpl
+results
