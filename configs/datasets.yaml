@@ -10,8 +10,8 @@ interhuman:
     MOTION_FILENAME: motion.pt
     CACHE: True
 
-teton:
-    NAME: teton
-    DATA_ROOT: /data/anders/data/teton_data/train
-    MOTION_FILENAME: optimized_motion_transformed.pt
-    CACHE: True
+# teton:
+#     NAME: teton
+#     DATA_ROOT: /data/anders/data/teton_data/train
+#     MOTION_FILENAME: optimized_motion_transformed.pt
+#     CACHE: True

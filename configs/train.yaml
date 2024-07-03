@@ -6,14 +6,14 @@ GENERAL:
 TRAIN:
   LR: 1e-4
   WEIGHT_DECAY: 0.00002
-  BATCH_SIZE: 64
+  BATCH_SIZE: 128 # 128
   EPOCH: 2000
   STEP: 1000000
   LOG_STEPS: 10
   SAVE_STEPS: 20000
   SAVE_EPOCH: 10
-  RESUME: checkpoints/IG-S-8/model/epoch=1219-step=251320.ckpt
-  NUM_WORKERS: 16
+  RESUME: #checkpoints/IG-S-8/model/epoch=29-step=2400-v1.ckpt
+  NUM_WORKERS: 32
   MODE: finetune
   LAST_EPOCH: 0
   LAST_ITER: 0

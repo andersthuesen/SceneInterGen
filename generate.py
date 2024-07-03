@@ -40,35 +40,12 @@ class LitGenModel(L.LightningModule):
         # train model init
         self.model = model
 
-    def plot_t2m(self, mp_data, result_path, caption):
-        mp_joint = []
-        for joint in mp_data:
-            mp_joint.append(joint)
-
-        plot_3d_motion(
-            result_path, paramUtil.t2m_kinematic_chain, mp_joint, title=caption, fps=10
-        )
-
-    def generate_one_sample(self, name, batch):
-        self.model.eval()
-
-        motion_output = self.generate_loop(batch)
-        result_path = f"results/{name}.mp4"
-        if not os.path.exists("results"):
-            os.makedirs("results")
-
-        # self.plot_t2m(
-        #     [motion_output[0], motion_output[1]], result_path, batch["prompt"]
-        # )
-
     def generate_loop(self, batch):
         return self.model.forward_test(batch)
 
 
 if __name__ == "__main__":
-    # torch.manual_seed(37)
     model_cfg = get_config("configs/model.yaml")
-    infer_cfg = get_config("configs/infer.yaml")
 
     mean = torch.load("mean.pt")
     std = torch.load("std.pt")
@@ -85,7 +62,7 @@ if __name__ == "__main__":
 
     device = torch.device("cpu")  # Force CPU for now
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
-    litmodel = LitGenModel(model, infer_cfg).to(device)
+    model = model.to(device)
 
     num_frames = 50
     num_people = 1
@@ -110,7 +87,7 @@ if __name__ == "__main__":
     embs = clip_model.ln_final(x).type(clip_model.dtype)
 
     # Generate motion
-    out = litmodel.generate_loop(
+    out = model.forward_test(
         {
             "motion_mask": None,
             "num_batches": 1,
@@ -133,11 +110,6 @@ if __name__ == "__main__":
     )
 
     joints = joints.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
-
-    torch.save(joints.clone().cpu(), "joints.pt")
-
-    print(joints.shape, joint_vels.shape, smpl_6d.shape)
-    print("Done")
 
     import matplotlib.pyplot as plt
 
