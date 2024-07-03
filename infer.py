@@ -87,8 +87,8 @@ if __name__ == "__main__":
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
     litmodel = LitGenModel(model, infer_cfg).to(device)
 
-    num_frames = 18
-    num_people = 2
+    num_frames = 50
+    num_people = 1
 
     # Setup conditioning
     # classes = torch.zeros(1, num_people, dtype=torch.long, device=device)
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     # actions[:, 0] = ACTIONS.index("laying_in_bed") + 1
     # actions[:, 1, :] = ACTIONS.index("standing_on_floor") + 1
 
-    prompt = "Two people are hugging."
+    prompt = "The person is walking forwards"
 
     tokens = clip.tokenize(prompt).to(device)
     x = clip_model.token_embedding(tokens)
@@ -141,23 +141,15 @@ if __name__ == "__main__":
 
     import matplotlib.pyplot as plt
 
-    min_x = joints[..., :24, 0].min().item()
-    max_x = joints[..., :24, 0].max().item()
-
-    min_y = joints[..., :24, 1].min().item()
-    max_y = joints[..., :24, 1].max().item()
-
-    min_z = joints[..., :24, 2].min().item()
-    max_z = joints[..., :24, 2].max().item()
-
     os.system("rm -rf results/*.png")
     for t in range(num_frames):
         plt.cla()
         fig = plt.figure()
         ax = plt.axes(projection="3d")
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(max_y, min_y)
-        ax.set_zlim(min_z, max_z)
+
+        ax.set_xlim(-2, 2)
+        ax.set_ylim(-2, 2)
+        ax.set_zlim(0, 4)
 
         # Set labels
         ax.set_xlabel("X")
