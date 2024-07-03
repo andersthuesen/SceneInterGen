@@ -93,10 +93,10 @@ class InterDenoiser(nn.Module):
         num_actions,
         max_num_people=16,
         bias=False,
-        latent_dim=512,
+        latent_dim=1024,
         num_frames=240,
         ff_size=1024,
-        num_layers=8,
+        num_layers=16,
         num_heads=8,
         dropout=0.1,
         activation="gelu",
@@ -118,8 +118,9 @@ class InterDenoiser(nn.Module):
         self.max_num_people = max_num_people
         self.points_group_size = points_group_size
 
-        self.emb_pos = PositionalEncoding(self.latent_dim, dropout=0)
-        self.emb_t = TimestepEmbedder(self.latent_dim, self.emb_pos)
+        self.pos_enc = PositionalEncoding(self.latent_dim, dropout=0)
+        self.emb_pos = TimestepEmbedder(self.latent_dim, self.pos_enc)
+        self.emb_t = TimestepEmbedder(self.latent_dim, self.pos_enc)
 
         self.emb_id = nn.Embedding(max_num_people + 1, self.latent_dim)
 
@@ -188,7 +189,9 @@ class InterDenoiser(nn.Module):
         motion_emb = (
             self.emb_motion(motion)
             # Embed position
-            + self.emb_pos.pe[:T, :][None, None, :, :]
+            + self.emb_pos(torch.arange(T, device=motion.device, dtype=torch.long))[
+                None, None, :, :
+            ]
             # Embed identity (Generate a random "id" for each person)
             + self.emb_id(
                 torch.randperm(self.max_num_people, device=motion.device)[:P]
@@ -396,8 +399,9 @@ class InterDiffusion(nn.Module):
         return output
 
     def forward(self, batch):
-        classes = batch["classes"]
-        actions = batch["actions"]
+        num_batches = batch["num_batches"]
+        num_frames = batch["num_frames"]
+        num_people = batch["num_people"]
 
         timestep_respacing = self.sampling_strategy
         self.diffusion_test = MotionDiffusion(
@@ -413,12 +417,13 @@ class InterDiffusion(nn.Module):
         self.cfg_model = ClassifierFreeSampleModel(self.net, self.cfg_weight)
         output = self.diffusion_test.ddim_sample_loop(
             self.cfg_model,
-            actions.shape + (self.nfeats,),
+            (num_batches, num_people, num_frames, self.nfeats),
             clip_denoised=False,
             progress=True,
             model_kwargs={
-                "classes": classes,
-                "actions": actions,
+                "motion_mask": batch["motion_mask"],
+                "classes": batch["classes"],
+                "actions": batch["actions"],
                 "object_points": batch["object_points"],
                 "object_points_mask": batch["object_points_mask"],
                 "description_emb": batch["description_emb"],

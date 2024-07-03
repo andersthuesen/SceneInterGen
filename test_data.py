@@ -1,3 +1,4 @@
+import os
 import torch
 from configs import get_config
 from datasets import DataModule
@@ -54,7 +55,7 @@ if __name__ == "__main__":
         )
         joints = joints.view(motion.shape[:-1] + SMPL_JOINTS_DIMS[0])
 
-        # server = viser.ViserServer()
+        os.system("rm -rf test/*")
 
         for t in range(joints.shape[2]):
             plt.cla()
@@ -107,5 +108,10 @@ if __name__ == "__main__":
                     )
 
             plt.legend()
-            plt.savefig("results/plot.png")
-            time.sleep(0.05)
+            plt.savefig(f"test/frame_{t}.png")
+
+        os.system(
+            f"ffmpeg -y -i test/frame_%d.png -framerate 10 -r 10 -c:v libx264 -pix_fmt yuv420p test/plot.mp4"
+        )
+
+        input("Press for next")

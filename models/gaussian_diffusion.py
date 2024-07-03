@@ -25,7 +25,7 @@ import smplx
 
 
 def w_mean(p: torch.Tensor, v: torch.Tensor, dim=None, eps=1e-6):
-    return (p * v).sum(dim) / (v.sum(dim) + eps)
+    return (p * v).sum(dim) / (p.sum(dim) + eps)
 
 
 def create_named_schedule_sampler(name, diffusion):
@@ -1404,21 +1404,21 @@ class MotionDiffusion(GaussianDiffusion):
 
         (
             tgt_joints,
-            tgt_joint_vels_,
-            tgt_smpl_pose_6d,
+            tgt_vels_,
+            tgt_pose_6d,
         ) = target.split(SIZES, dim=-1)
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
-        tgt_joint_vels_ = tgt_joint_vels_.view(target.shape[:-1] + (-1, 3))
-        tgt_smpl_pose_6d = tgt_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
+        tgt_vels_ = tgt_vels_.view(target.shape[:-1] + (-1, 3))
+        tgt_pose_6d = tgt_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
         (
             pred_joints,
-            pred_joint_vels_,
-            pred_smpl_pose_6d,
+            pred_vels_,
+            pred_pose_6d,
         ) = pred.split(SIZES, dim=-1)
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
-        pred_joint_vels_ = pred_joint_vels_.view(pred.shape[:-1] + (-1, 3))
-        pred_smpl_pose_6d = pred_smpl_pose_6d.view(target.shape[:-1] + (23, 3, 2))
+        pred_vels_ = pred_vels_.view(pred.shape[:-1] + (-1, 3))
+        pred_pose_6d = pred_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
         # Compute derivations
         a, b = zip(*SMPL_SKELETON)
@@ -1434,7 +1434,7 @@ class MotionDiffusion(GaussianDiffusion):
         # Compute losses
         pose_loss = w_mean(
             mask,
-            mse_loss(pred_smpl_pose_6d, tgt_smpl_pose_6d, reduction="none")
+            mse_loss(tgt_pose_6d, pred_pose_6d, reduction="none")
             .sum(dim=(-1, -2))  # Sum each coordinate
             .mean(dim=-1),  # Mean over each joint
         )
@@ -1451,23 +1451,28 @@ class MotionDiffusion(GaussianDiffusion):
         # Compute vel mask from mask
         vel_mask = mask[..., 1:] & mask[..., :-1]
 
-        tgt_joint_vels = tgt_joints[..., 1:, :, :] - tgt_joints[..., :-1, :, :]
-        pred_joint_vels = pred_joints[..., 1:, :, :] - pred_joints[..., :-1, :, :]
+        tgt_vels = tgt_joints[..., 1:, :, :] - tgt_joints[..., :-1, :, :]
+        pred_vels = pred_joints[..., 1:, :, :] - pred_joints[..., :-1, :, :]
 
-        joint_vel_loss = w_mean(
-            vel_mask,
-            mse_loss(pred_joint_vels, tgt_joint_vels, reduction="none")
+        vel_loss = w_mean(
+            t_mask[..., None, None] & vel_mask,
+            mse_loss(pred_vels, tgt_vels, reduction="none")
             .sum(dim=-1)  # Sum each coordinate
             .mean(dim=-1),  # Mean over each joint
-            dim=(-1, -2),
+        )
+
+        vel_loss_ = w_mean(
+            vel_mask,
+            mse_loss(pred_vels_[..., 1:, :, :], tgt_vels_[..., 1:, :, :], reduction="none")
+            .sum(dim=-1)
+            .mean(dim=-1)
         )
 
         bone_length_loss = w_mean(
-            mask,
+            t_mask[..., None, None] & mask,
             mse_loss(pred_bone_lengths, tgt_bone_lengths, reduction="none").mean(
                 dim=-1
             ),  # Mean over each joint
-            dim=(-1, -2),
         )
 
         B, P, T, S, *_ = tgt_joints.shape
@@ -1507,42 +1512,38 @@ class MotionDiffusion(GaussianDiffusion):
 
             # Joints are within 1 meter of each other
             pred_pairwise_close_mask = pred_pairwise_dist < 1
-
             pairwise_dist_loss = w_mean(
-                tgt_pairwise_mask,
-                w_mean(
-                    pred_pairwise_close_mask,
-                    mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
-                    dim=(-1, -2),
-                ),
-                dim=(-1, -2),
+                t_mask[..., None, None, None]
+                & tgt_pairwise_mask[..., None, None]
+                & pred_pairwise_close_mask,
+                mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
             )
 
         # Should be weighted by lambda_t
         simple_loss = w_mean(
             mask,
             mse_loss(
-                items["pred"],
-                items["target"],
+                pred,
+                target,
                 reduction="none",
             ).mean(dim=-1),
         )
         # Loss weights from InterGen paper (missing RO loss as it requires inverse kinematics)
         # We double the joint loss from 30 to 60 as InterGen sums the joint vel loss over two people
-        reg_loss = 30 * joint_vel_loss + 10 * bone_length_loss + 3 * pairwise_dist_loss
+        reg_loss = 30 * vel_loss + 10 * bone_length_loss + 3 * pairwise_dist_loss
 
         # Mask out regularization losses after t_bar
-        weighted_reg_loss = w_mean(t_mask, reg_loss)
-        total_loss = simple_loss + weighted_reg_loss
+        total_loss = simple_loss + reg_loss
 
         losses = {
-            "pose_loss": pose_loss,
-            "joint_loss": joint_loss,
-            "joint_vel_loss": w_mean(t_mask, joint_vel_loss),
-            "bone_length_loss": w_mean(t_mask, bone_length_loss),
-            "pairwise_dist_loss": w_mean(t_mask, pairwise_dist_loss),
-            "reg_loss": weighted_reg_loss,
             "MPJPE": mpjpe,
+            "joint_loss": joint_loss,
+            "pose_loss": pose_loss,
+            "vel_loss_": vel_loss_,
+            "vel_loss": vel_loss,
+            "bone_length_loss": bone_length_loss,
+            "pairwise_dist_loss": pairwise_dist_loss,
+            "reg_loss": reg_loss,
             "simple_loss": simple_loss,
             "total": total_loss,
         }

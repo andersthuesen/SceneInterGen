@@ -1,10 +1,6 @@
 import os.path
 import clip
 from datasets.teton import (
-    ACTIONS,
-    PERSON_CLASSES,
-    SMPL_6D_SIZE,
-    SMPL_6D_SIZES,
     SMPL_JOINTS_DIMS,
     SMPL_JOINTS_SIZE,
 )
@@ -25,7 +21,7 @@ from models.intergen import InterGen
 
 
 class LitGenModel(L.LightningModule):
-    def __init__(self, model, cfg):
+    def __init__(self, model: InterGen, cfg):
         super().__init__()
         # cfg init
         self.cfg = cfg
@@ -44,35 +40,12 @@ class LitGenModel(L.LightningModule):
         # train model init
         self.model = model
 
-    def plot_t2m(self, mp_data, result_path, caption):
-        mp_joint = []
-        for joint in mp_data:
-            mp_joint.append(joint)
-
-        plot_3d_motion(
-            result_path, paramUtil.t2m_kinematic_chain, mp_joint, title=caption, fps=10
-        )
-
-    def generate_one_sample(self, name, batch):
-        self.model.eval()
-
-        motion_output = self.generate_loop(batch)
-        result_path = f"results/{name}.mp4"
-        if not os.path.exists("results"):
-            os.makedirs("results")
-
-        # self.plot_t2m(
-        #     [motion_output[0], motion_output[1]], result_path, batch["prompt"]
-        # )
-
     def generate_loop(self, batch):
         return self.model.forward_test(batch)
 
 
 if __name__ == "__main__":
-    # torch.manual_seed(37)
     model_cfg = get_config("configs/model.yaml")
-    infer_cfg = get_config("configs/infer.yaml")
 
     mean = torch.load("mean.pt")
     std = torch.load("std.pt")
@@ -89,21 +62,21 @@ if __name__ == "__main__":
 
     device = torch.device("cpu")  # Force CPU for now
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
-    litmodel = LitGenModel(model, infer_cfg).to(device)
+    model = model.to(device)
 
-    num_frames = 100
-    num_people = 2
+    num_frames = 50
+    num_people = 1
 
     # Setup conditioning
-    classes = torch.zeros(1, num_people, dtype=torch.long, device=device)
+    # classes = torch.zeros(1, num_people, dtype=torch.long, device=device)
     # classes[:, 0] = PERSON_CLASSES.index("patient") + 1
     # classes[:, 1] = PERSON_CLASSES.index("medical_staff") + 1
 
-    actions = torch.zeros(1, num_people, num_frames, dtype=torch.long, device=device)
+    # actions = torch.zeros(1, num_people, num_frames, dtype=torch.long, device=device)
     # actions[:, 0] = ACTIONS.index("laying_in_bed") + 1
     # actions[:, 1, :] = ACTIONS.index("standing_on_floor") + 1
 
-    prompt = "Two people are hugging."
+    prompt = "The person is walking forwards"
 
     tokens = clip.tokenize(prompt).to(device)
     x = clip_model.token_embedding(tokens)
@@ -111,15 +84,19 @@ if __name__ == "__main__":
     x = pe_tokens.permute(1, 0, 2)  # NLD -> LND
     x = clip_model.transformer(x)
     x = x.permute(1, 0, 2)
-    clip_out = clip_model.ln_final(x).type(clip_model.dtype)
+    embs = clip_model.ln_final(x).type(clip_model.dtype)
 
     # Generate motion
-    out = litmodel.generate_loop(
+    out = model.forward_test(
         {
-            "classes": classes,
-            "actions": actions,
+            "motion_mask": None,
+            "num_batches": 1,
+            "num_people": num_people,
+            "num_frames": num_frames,
+            "classes": None,
+            "actions": None,
             "description_tokens": tokens,
-            "description_embs": clip_out,
+            "description_embs": embs,
             "object_points": None,
             "object_points_mask": None,
         }
@@ -134,32 +111,17 @@ if __name__ == "__main__":
 
     joints = joints.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
 
-    torch.save(joints.clone().cpu(), "joints.pt")
-
-    print(joints.shape, joint_vels.shape, smpl_6d.shape)
-    print("Done")
-
     import matplotlib.pyplot as plt
-    import time
 
-    min_x = joints[..., :24, 0].min().item()
-    max_x = joints[..., :24, 0].max().item()
-
-    min_y = joints[..., :24, 1].min().item()
-    max_y = joints[..., :24, 1].max().item()
-
-    min_z = joints[..., :24, 2].min().item()
-    max_z = joints[..., :24, 2].max().item()
-
-    # server = viser.ViserServer()
-
-    for t in range(100):
+    os.system("rm -rf results/*.png")
+    for t in range(num_frames):
         plt.cla()
         fig = plt.figure()
         ax = plt.axes(projection="3d")
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(max_y, min_y)
-        ax.set_zlim(min_z, max_z)
+
+        ax.set_xlim(-2, 2)
+        ax.set_ylim(-2, 2)
+        ax.set_zlim(0, 4)
 
         # Set labels
         ax.set_xlabel("X")
@@ -192,59 +154,9 @@ if __name__ == "__main__":
                 )
 
         plt.legend()
-        plt.savefig("results/plot.png")
-        time.sleep(0.1)
+        plt.savefig(f"results/frame_{t}.png")
 
-    # smpl_trans, smpl_6d_rot, smpl_6d_pose = smpl_6d.split(SMPL_6D_SIZES, dim=-1)
-
-    # smpl_rot = rot6d_to_rotmat(smpl_6d_rot.view(output.shape[:-1] + (3, 2)))
-
-    # smpl_pose = rot6d_to_rotmat(smpl_6d_pose.view(output.shape[:-1] + (23, 3, 2)))
-
-    # # print(smpl_trans.shape, smpl_rot.shape, smpl_pose.shape)
-
-    # motion = torch.cat(
-    #     [
-    #         smpl_trans,
-    #         smpl_rot.view(output.shape[:-1] + (-1,)),
-    #         smpl_pose.view(output.shape[:-1] + (-1,)),
-    #     ],
-    #     dim=-1,
-    # )
-
-    # torch.save(motion, "results/motion.pt")
-
-    # exit(0)
-
-    # joints = joints.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
-    # joint_vels = joint_vels.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
-
-    # #
-    # # joints = joints[..., :1, :, :] + joint_vels.cumsum(dim=2)
-
-    # # while True:
-    # #     pass
-
-    # # for i in range(100):
-    # #     plt.cla()
-    # #     plt.xlim(min_x, max_x)
-    # #     plt.ylim(min_y, max_y)
-    # #     plt.scatter(
-    # #         joints[0, 0, i, :22, 0].cpu().numpy(),
-    # #         joints[0, 0, i, :22, 1].cpu().numpy(),
-    # #         label="Person 1",
-    # #     )
-    # #     plt.scatter(
-    # #         joints[0, 1, i, :22, 0].cpu().numpy(),
-    # #         joints[0, 1, i, :22, 1].cpu().numpy(),
-    # #         label="Person 2",
-    # #     )
-    # #     plt.legend()
-    # #     plt.savefig("results/plot.png")
-    # #     time.sleep(0.25)
-
-    # # litmodel.plot_t2m(
-    # #     joints[0].cpu().numpy(),
-    # #     "results/test.mp4",
-    # #     "Hello world",
-    # # )
+    # Run ffmpeg
+    os.system(
+        f"ffmpeg -y -r 10 -i results/frame_%d.png -vcodec libx264 -pix_fmt yuv420p results/plot.mp4"
+    )
