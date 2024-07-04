@@ -1463,9 +1463,11 @@ class MotionDiffusion(GaussianDiffusion):
 
         vel_loss_ = w_mean(
             vel_mask,
-            mse_loss(pred_vels_[..., 1:, :, :], tgt_vels_[..., 1:, :, :], reduction="none")
+            mse_loss(
+                pred_vels_[..., 1:, :, :], tgt_vels_[..., 1:, :, :], reduction="none"
+            )
             .sum(dim=-1)
-            .mean(dim=-1)
+            .mean(dim=-1),
         )
 
         bone_length_loss = w_mean(

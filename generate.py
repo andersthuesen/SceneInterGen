@@ -6,43 +6,16 @@ from datasets.teton import (
 )
 
 import torch
-import lightning as L
 
-from os.path import join as pjoin
-from models import *
+# from models import *
 from configs import get_config
 from models.smpl import SMPL_SKELETON
-from utils.plot_script import *
-from utils.preprocess import *
-from utils import paramUtil
-
+from models.intergen import InterGen
+from geometry import rot6d_to_rotmat
 
 from models.intergen import InterGen
 
-
-class LitGenModel(L.LightningModule):
-    def __init__(self, model: InterGen, cfg):
-        super().__init__()
-        # cfg init
-        self.cfg = cfg
-
-        self.automatic_optimization = False
-
-        self.save_root = pjoin(self.cfg.GENERAL.CHECKPOINT, self.cfg.GENERAL.EXP_NAME)
-        self.model_dir = pjoin(self.save_root, "model")
-        self.meta_dir = pjoin(self.save_root, "meta")
-        self.log_dir = pjoin(self.save_root, "log")
-
-        os.makedirs(self.model_dir, exist_ok=True)
-        os.makedirs(self.meta_dir, exist_ok=True)
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        # train model init
-        self.model = model
-
-    def generate_loop(self, batch):
-        return self.model.forward_test(batch)
-
+from tqdm import tqdm
 
 if __name__ == "__main__":
     model_cfg = get_config("configs/model.yaml")
@@ -64,7 +37,10 @@ if __name__ == "__main__":
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
     model = model.to(device)
 
-    num_frames = 50
+    clip_model.eval()
+    model.eval()
+
+    num_frames = 40
     num_people = 1
 
     # Setup conditioning
@@ -76,15 +52,17 @@ if __name__ == "__main__":
     # actions[:, 0] = ACTIONS.index("laying_in_bed") + 1
     # actions[:, 1, :] = ACTIONS.index("standing_on_floor") + 1
 
-    prompt = "The person is walking forwards"
+    prompt = "a person is sitting down on a chair."
 
-    tokens = clip.tokenize(prompt).to(device)
+    tokens = clip.tokenize([prompt]).to(device)
     x = clip_model.token_embedding(tokens)
     pe_tokens = x + clip_model.positional_embedding.type(clip_model.dtype)
     x = pe_tokens.permute(1, 0, 2)  # NLD -> LND
     x = clip_model.transformer(x)
     x = x.permute(1, 0, 2)
     embs = clip_model.ln_final(x).type(clip_model.dtype)
+
+    print(tokens.shape, embs.shape)
 
     # Generate motion
     out = model.forward_test(
@@ -105,16 +83,21 @@ if __name__ == "__main__":
     output = out["output"]
     output = output * std.to(device) + mean.to(device)
 
-    joints, joint_vels, smpl_6d = output.split(
+    joints, joint_vels, pose_6d = output.split(
         [SMPL_JOINTS_SIZE, SMPL_JOINTS_SIZE, 23 * 3 * 2], dim=-1
     )
 
     joints = joints.view(output.shape[:-1] + SMPL_JOINTS_DIMS[0])
+    pose_6d = pose_6d.view(output.shape[:-1] + (23, 3, 2))
+    pose = rot6d_to_rotmat(pose_6d)
+
+    torch.save(joints.cpu().clone(), "results/joints.pt")
+    torch.save(pose.cpu().clone(), "results/pose.pt")
 
     import matplotlib.pyplot as plt
 
     os.system("rm -rf results/*.png")
-    for t in range(num_frames):
+    for t in tqdm(range(num_frames), desc="Saving frames"):
         plt.cla()
         fig = plt.figure()
         ax = plt.axes(projection="3d")
@@ -131,10 +114,7 @@ if __name__ == "__main__":
         # Change the view angle so we look into the X-Y plane with X as the horizontal axis and Y as the vertical
         ax.view_init(elev=10, azim=-45)
 
-        COLORS = (
-            "red",
-            "green",
-        )
+        COLORS = ("red", "green", "blue", "yellow")
 
         for person_idx, person_joints in enumerate(joints[0, :, t]):
             ax.scatter3D(

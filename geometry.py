@@ -22,8 +22,8 @@ def rotmat_to_rot6d(rotmat: torch.Tensor) -> torch.Tensor:
 
 def perspective_projection(
     points: torch.Tensor,
-    translation: torch.Tensor,
     focal_length: torch.Tensor,
+    translation: Optional[torch.Tensor] = None,
     camera_center: Optional[torch.Tensor] = None,
     rotation: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
@@ -58,7 +58,8 @@ def perspective_projection(
 
     # Transform points
     points = torch.einsum("bij,bkj->bki", rotation, points)
-    points = points + translation.unsqueeze(1)
+    if translation is not None:
+        points = points + translation.unsqueeze(1)
 
     # Apply perspective distortion
     projected_points = points / points[:, :, -1].unsqueeze(-1)
