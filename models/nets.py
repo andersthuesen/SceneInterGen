@@ -354,13 +354,12 @@ class InterDiffusion(nn.Module):
     def batch_cond_mask(
         self, cond: Optional[torch.Tensor], mask_prob=0.1
     ) -> Optional[torch.Tensor]:
-        # Mask out whole batch with 10% probability (classifier free guidance)
         if cond is None:
             return None
 
         mask = (
-            torch.randn(cond.shape[:1] + (1,) * (cond.dim() - 1), device=cond.device)
-            < mask_prob
+            torch.rand(cond.shape[:1] + (1,) * (cond.dim() - 1), device=cond.device)
+            > mask_prob
         )
         return cond * mask
 
