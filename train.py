@@ -12,6 +12,8 @@ from models.intergen import InterGen
 from models.utils import CosineWarmupScheduler
 from utils.utils import print_current_loss
 
+from lightning.pytorch.loggers.tensorboard import TensorBoardLogger
+
 os.environ["PL_TORCH_DISTRIBUTED_BACKEND"] = "nccl"
 from lightning.pytorch.strategies import DDPStrategy
 
@@ -25,7 +27,6 @@ class LitTrainModel(pl.LightningModule):
         super().__init__()
         # cfg init
         self.cfg = cfg
-        self.mode = cfg.TRAIN.MODE
 
         self.automatic_optimization = False
 
@@ -40,13 +41,12 @@ class LitTrainModel(pl.LightningModule):
 
         self.model = model
 
-        self.writer = SummaryWriter(self.log_dir)
-
     def _configure_optim(self):
         optimizer = optim.AdamW(
             self.model.parameters(),
             lr=float(self.cfg.TRAIN.LR),
             weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
+            fused=True,
         )
         scheduler = CosineWarmupScheduler(
             optimizer=optimizer, warmup=10, max_iters=self.cfg.TRAIN.EPOCH, verbose=True
@@ -88,9 +88,6 @@ class LitTrainModel(pl.LightningModule):
         self.rank = 0
         self.world_size = 1
         self.start_time = time.time()
-        self.it = self.cfg.TRAIN.LAST_ITER if self.cfg.TRAIN.LAST_ITER else 0
-        self.epoch = self.cfg.TRAIN.LAST_EPOCH if self.cfg.TRAIN.LAST_EPOCH else 0
-        self.logs = OrderedDict()
 
     def training_step(self, batch, batch_idx):
         loss, loss_logs = self.forward(batch)
@@ -103,29 +100,20 @@ class LitTrainModel(pl.LightningModule):
         return {"loss": loss, "loss_logs": loss_logs}
 
     def on_train_batch_end(self, outputs, batch, batch_idx):
-        if outputs.get("skip_batch") or not outputs.get("loss_logs"):
-            return
-        for k, v in outputs["loss_logs"].items():
-            if k not in self.logs:
-                self.logs[k] = v.item()
-            else:
-                self.logs[k] += v.item()
+        self.log_dict(outputs["loss_logs"], on_step=True, on_epoch=False, prog_bar=True)
 
-        self.it += 1
-        if self.it % self.cfg.TRAIN.LOG_STEPS == 0 and self.device.index == 0:
-            mean_loss = OrderedDict({})
-            for tag, value in self.logs.items():
-                mean_loss[tag] = value / self.cfg.TRAIN.LOG_STEPS
-                self.writer.add_scalar(tag, mean_loss[tag], self.it)
-            self.logs = OrderedDict()
-            print_current_loss(
-                self.start_time,
-                self.it,
-                mean_loss,
-                self.trainer.current_epoch,
-                inner_iter=batch_idx,
-                lr=self.trainer.optimizers[0].param_groups[0]["lr"],
-            )
+        # if outputs.get("skip_batch") or not outputs.get("loss_logs"):
+        #     return
+
+        # if self.global_step % self.cfg.TRAIN.LOG_STEPS == 0 and self.device.index == 0:
+        #     print_current_loss(
+        #         self.start_time,
+        #         self.global_step,
+        #         outputs["loss_logs"],
+        #         self.trainer.current_epoch,
+        #         inner_iter=batch_idx,
+        #         lr=self.trainer.optimizers[0].param_groups[0]["lr"],
+        #     )
 
     def on_train_epoch_end(self):
         # pass
@@ -133,14 +121,14 @@ class LitTrainModel(pl.LightningModule):
         if sch is not None:
             sch.step()
 
-    def save(self, file_name):
-        state = {}
-        try:
-            state["model"] = self.model.module.state_dict()
-        except:
-            state["model"] = self.model.state_dict()
-        torch.save(state, file_name, _use_new_zipfile_serialization=False)
-        return
+    # def save(self, file_name):
+    #     state = {}
+    #     try:
+    #         state["model"] = self.model.module.state_dict()
+    #     except:
+    #         state["model"] = self.model.state_dict()
+    #     torch.save(state, file_name, _use_new_zipfile_serialization=False)
+    #     return
 
 
 if __name__ == "__main__":
@@ -177,6 +165,8 @@ if __name__ == "__main__":
         strategy=DDPStrategy(find_unused_parameters=True),
         precision=32,
         callbacks=[checkpoint_callback],
+        logger=TensorBoardLogger(save_dir=litmodel.log_dir),
+        log_every_n_steps=train_cfg.TRAIN.LOG_STEPS,
     )
 
     trainer.fit(model=litmodel, datamodule=datamodule, ckpt_path=train_cfg.TRAIN.RESUME)
