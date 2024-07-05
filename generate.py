@@ -6,6 +6,9 @@ from datasets.teton import (
 )
 
 import torch
+import click
+
+from multiprocessing import Pool
 
 # from models import *
 from configs import get_config
@@ -17,9 +20,61 @@ from models.intergen import InterGen
 
 from tqdm import tqdm
 
-if __name__ == "__main__":
-    model_cfg = get_config("configs/model.yaml")
+import matplotlib.pyplot as plt
 
+from functools import partial
+
+
+def render_frame(joints: torch.Tensor, t: int):
+    plt.cla()
+    fig = plt.figure()
+    ax = plt.axes(projection="3d")
+
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_zlim(0, 4)
+
+    # Set labels
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+
+    # Change the view angle so we look into the X-Y plane with X as the horizontal axis and Y as the vertical
+    ax.view_init(elev=10, azim=-45)
+
+    COLORS = ("red", "green", "blue", "yellow")
+
+    for person_idx, person_joints in enumerate(joints[0, :, t]):
+        ax.scatter3D(
+            person_joints[:24, 0].cpu().numpy(),
+            person_joints[:24, 1].cpu().numpy(),
+            person_joints[:24, 2].cpu().numpy(),
+            label=f"Person {person_idx + 1}",
+            color=COLORS[person_idx],
+            s=1,
+        )
+        for i, j in SMPL_SKELETON:
+            ax.plot(
+                [person_joints[i, 0].item(), person_joints[j, 0].item()],
+                [person_joints[i, 1].item(), person_joints[j, 1].item()],
+                [person_joints[i, 2].item(), person_joints[j, 2].item()],
+                color=COLORS[person_idx],
+            )
+
+    plt.legend()
+    plt.savefig(f"results/frame_{t}.png")
+
+
+@click.command()
+@click.argument("prompt", type=str)
+@click.option("-p", type=int, default=2, help="Number of people in the scene")
+@click.option("-f", type=int, default=100, help="Number of frames to generate")
+@click.option("--device", type=str, default="cpu", help="Device to run on")
+def cli(prompt: str, p: int, f: int, device: str):
+    num_people = p
+    num_frames = f
+
+    model_cfg = get_config("configs/model.yaml")
     mean = torch.load("mean.pt")
     std = torch.load("std.pt")
 
@@ -33,15 +88,12 @@ if __name__ == "__main__":
         model.load_state_dict(ckpt["state_dict"], strict=False)
         print("checkpoint state loaded!")
 
-    device = torch.device("cpu")  # Force CPU for now
+    device = torch.device(device)  # Force CPU for now
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
     model = model.to(device)
 
     clip_model.eval()
     model.eval()
-
-    num_frames = 40
-    num_people = 1
 
     # Setup conditioning
     # classes = torch.zeros(1, num_people, dtype=torch.long, device=device)
@@ -52,17 +104,25 @@ if __name__ == "__main__":
     # actions[:, 0] = ACTIONS.index("laying_in_bed") + 1
     # actions[:, 1, :] = ACTIONS.index("standing_on_floor") + 1
 
-    prompt = "a person is sitting down on a chair."
+    # prompt = "the first one lowers the left hand while the second one gently drops the right hand."
 
-    tokens = clip.tokenize([prompt]).to(device)
-    x = clip_model.token_embedding(tokens)
+    tokens = clip.tokenize(prompt, truncate=True).to(device)
+    x = clip_model.token_embedding(tokens).type(
+        clip_model.dtype
+    )  # [batch_size, n_ctx, d_model]
     pe_tokens = x + clip_model.positional_embedding.type(clip_model.dtype)
     x = pe_tokens.permute(1, 0, 2)  # NLD -> LND
     x = clip_model.transformer(x)
-    x = x.permute(1, 0, 2)
-    embs = clip_model.ln_final(x).type(clip_model.dtype)
+    x = x.permute(1, 0, 2)  # LND -> NLD
+    embs = clip_model.ln_final(x)  # Normalize the final layer
 
-    print(tokens.shape, embs.shape)
+    # tokens = torch.load(
+    #     "/data/anders/data/interhuman/subset/6822/description_tokens.pt"
+    # )[:1]
+    # embs = torch.load("/data/anders/data/interhuman/subset/6822/description_embs.pt")[
+    #     :1
+    # ]
+    # print(tokens.shape, embs.shape)
 
     # Generate motion
     out = model.forward_test(
@@ -73,8 +133,8 @@ if __name__ == "__main__":
             "num_frames": num_frames,
             "classes": None,
             "actions": None,
-            "description_tokens": tokens,
-            "description_embs": embs,
+            "description_tokens": tokens.float(),
+            "description_embs": embs.float(),
             "object_points": None,
             "object_points_mask": None,
         }
@@ -94,49 +154,21 @@ if __name__ == "__main__":
     torch.save(joints.cpu().clone(), "results/joints.pt")
     torch.save(pose.cpu().clone(), "results/pose.pt")
 
-    import matplotlib.pyplot as plt
-
     os.system("rm -rf results/*.png")
-    for t in tqdm(range(num_frames), desc="Saving frames"):
-        plt.cla()
-        fig = plt.figure()
-        ax = plt.axes(projection="3d")
 
-        ax.set_xlim(-2, 2)
-        ax.set_ylim(-2, 2)
-        ax.set_zlim(0, 4)
-
-        # Set labels
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-
-        # Change the view angle so we look into the X-Y plane with X as the horizontal axis and Y as the vertical
-        ax.view_init(elev=10, azim=-45)
-
-        COLORS = ("red", "green", "blue", "yellow")
-
-        for person_idx, person_joints in enumerate(joints[0, :, t]):
-            ax.scatter3D(
-                person_joints[:24, 0].cpu().numpy(),
-                person_joints[:24, 1].cpu().numpy(),
-                person_joints[:24, 2].cpu().numpy(),
-                label=f"Person {person_idx + 1}",
-                color=COLORS[person_idx],
-                s=1,
-            )
-            for i, j in SMPL_SKELETON:
-                ax.plot(
-                    [person_joints[i, 0].item(), person_joints[j, 0].item()],
-                    [person_joints[i, 1].item(), person_joints[j, 1].item()],
-                    [person_joints[i, 2].item(), person_joints[j, 2].item()],
-                    color=COLORS[person_idx],
-                )
-
-        plt.legend()
-        plt.savefig(f"results/frame_{t}.png")
+    with Pool() as p:
+        for _ in tqdm(
+            p.imap_unordered(partial(render_frame, joints.cpu()), range(num_frames)),
+            desc="Rendering frames",
+            total=num_frames,
+        ):
+            pass
 
     # Run ffmpeg
     os.system(
-        f"ffmpeg -y -r 10 -i results/frame_%d.png -vcodec libx264 -pix_fmt yuv420p results/plot.mp4"
+        f"ffmpeg -y -r 10 -i results/frame_%d.png -vcodec libx264 -pix_fmt yuv420p results/motion.mp4"
     )
+
+
+if __name__ == "__main__":
+    cli()

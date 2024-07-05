@@ -6,7 +6,7 @@ INPUT_DIM: 282 # 24*3 joints + 24*3 velocities + 23*3*2 6D pose
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
-CHECKPOINT: checkpoints/IG-S-8/model/epoch=239-step=38640.ckpt
+CHECKPOINT: checkpoints/IG-S-8/epoch=499-step=80500.ckpt
 SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
 
 DIFFUSION_STEPS: 1000
@@ -19,8 +19,8 @@ FINETUNE: False
 T_BAR: 700
 
 CONTROL: text
-STRATEGY: ddim100
-CFG_WEIGHT: 3
+STRATEGY: ddim50
+CFG_WEIGHT: 3.5
 
 NUM_ACTIONS: 12
 NUM_CLASSES: 3

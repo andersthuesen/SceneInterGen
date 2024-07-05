@@ -7,8 +7,8 @@ TRAIN:
   LR: 1e-4
   WEIGHT_DECAY: 0.00002
   BATCH_SIZE: 128
-  EPOCH: 1000
+  EPOCH: 500
   LOG_STEPS: 10
   SAVE_EPOCH: 10
-  RESUME: #checkpoints/IG-S-8/model/epoch=159-step=12800-v1.ckpt
+  RESUME: checkpoints/IG-S-8/model/epoch=249-step=40250.ckpt
   NUM_WORKERS: 32
