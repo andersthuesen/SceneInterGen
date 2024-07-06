@@ -3,11 +3,13 @@ import torch
 from .interhuman import InterHumanDataset
 
 from .teton import (
+    AppendJointVelocities,
+    AppendRandomCamera,
+    AppendRenderedKeypoints,
+    AppendSMPLJoints,
     TetonDataset,
-    ToNonCannonical,
-    RandomRotate,
-    RandomTranslate,
     ChooseRandomDescription,
+    ToRepresentation,
     collate_pose_annotations,
 )
 
@@ -87,14 +89,19 @@ class DataModule(pl.LightningDataModule):
             print(f"Loading {dataset_name}")
             dataset = TetonDataset(
                 root_path=dataset_cfg.DATA_ROOT,
-                transform=ToNonCannonical(self.smpl),
+                transform=Compose(
+                    [
+                        AppendSMPLJoints(self.smpl),
+                        AppendJointVelocities(),
+                    ]
+                ),
                 augment=(
                     Compose(
                         [
-                            ChooseRandomDescription(),
-                            RandomTranslate(max_z=0),
-                            RandomRotate(),
-                            RandomTranslate(max_z=0),
+                            # ChooseRandomDescription(),
+                            AppendRandomCamera(),
+                            AppendRenderedKeypoints(),
+                            ToRepresentation(),
                         ]
                         + [Normalize(self.mean, self.std)]
                         if self.mean is not None and self.std is not None

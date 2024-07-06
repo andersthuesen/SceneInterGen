@@ -1,14 +1,14 @@
 GENERAL:
-  EXP_NAME: IG-S-8
+  EXP_NAME: IG-S-8-KPTS
   CHECKPOINT: ./checkpoints
   LOG_DIR: ./log
 
 TRAIN:
   LR: 1e-4
   WEIGHT_DECAY: 0.00002
-  BATCH_SIZE: 128
+  BATCH_SIZE: 128 #128
   EPOCH: 500
   LOG_STEPS: 10
   SAVE_EPOCH: 10
-  RESUME: checkpoints/IG-S-8/model/epoch=249-step=40250.ckpt
+  RESUME: # checkpoints/IG-S-8/model/epoch=499-step=80500.ckpt
   NUM_WORKERS: 32

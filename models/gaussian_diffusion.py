@@ -21,8 +21,6 @@ from utils.plot_script import *
 
 from torch.nn.functional import mse_loss
 
-import smplx
-
 
 def w_mean(p: torch.Tensor, v: torch.Tensor, dim=None, eps=1e-6):
     return (p * v).sum(dim) / (p.sum(dim) + eps)
@@ -1381,11 +1379,16 @@ class MotionDiffusion(GaussianDiffusion):
     def training_losses(
         self,
         model,
-        smpl: smplx.SMPLLayer,
-        mask,
-        t_bar,
+        mask: torch.Tensor,
+        weights: torch.Tensor,
+        t_bar: int,
         mean: torch.Tensor,
         std: torch.Tensor,
+        cam_R: torch.Tensor,
+        cam_t: torch.Tensor,
+        cam_f: torch.Tensor,
+        kpts: torch.Tensor,
+        kpts_mask: torch.Tensor,
         *args,
         **kwargs,
     ):
@@ -1521,9 +1524,30 @@ class MotionDiffusion(GaussianDiffusion):
                 mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
             )
 
+        # Transform joints to camera space
+        pred_joints_cam = (
+            pred_joints.flatten(start_dim=1, end_dim=-2) @ cam_R.mT + cam_t[:, None, :]
+        )
+
+        # Project joints to 2D keypoints
+        pred_kpts = (
+            pred_joints_cam[..., :2]
+            / (pred_joints_cam[..., 2:3] + 1e-6)
+            * cam_f[:, None, :]
+        )
+
+        pred_kpts = pred_kpts.view(kpts.shape)
+
+        pred_kpts_mask = torch.all((-1 < pred_kpts) & (pred_kpts < 1), dim=-1)
+
+        kpts_loss = w_mean(
+            t_mask[..., None, None, None] & kpts_mask & pred_kpts_mask,
+            mse_loss(pred_kpts, kpts, reduction="none").mean(dim=-1),
+        )
+
         # Should be weighted by lambda_t
         simple_loss = w_mean(
-            mask,
+            mask * weights[..., None, None],
             mse_loss(
                 pred,
                 target,
@@ -1532,7 +1556,12 @@ class MotionDiffusion(GaussianDiffusion):
         )
         # Loss weights from InterGen paper (missing RO loss as it requires inverse kinematics)
         # We double the joint loss from 30 to 60 as InterGen sums the joint vel loss over two people
-        reg_loss = 30 * vel_loss + 10 * bone_length_loss + 3 * pairwise_dist_loss
+        reg_loss = (
+            30 * vel_loss
+            + 10 * bone_length_loss
+            + 3 * pairwise_dist_loss
+            # + 0.01 * kpts_loss
+        )
 
         # Mask out regularization losses after t_bar
         total_loss = simple_loss + reg_loss
@@ -1540,6 +1569,7 @@ class MotionDiffusion(GaussianDiffusion):
         losses = {
             "MPJPE": mpjpe,
             "joint_loss": joint_loss,
+            "kpts_loss": kpts_loss,
             "pose_loss": pose_loss,
             "vel_loss_": vel_loss_,
             "vel_loss": vel_loss,
@@ -1549,6 +1579,11 @@ class MotionDiffusion(GaussianDiffusion):
             "simple_loss": simple_loss,
             "total": total_loss,
         }
+
+        # for k, v in losses.items():
+        #     if torch.isnan(v).any():
+        #         print(k, v)
+        #         raise ValueError(f"Loss {k} is NaN")
 
         return losses
 

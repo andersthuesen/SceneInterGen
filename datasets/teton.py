@@ -10,11 +10,11 @@ from smplx import SMPLLayer
 
 from scipy.spatial.transform import Rotation as R
 
-import sys
+from collections import defaultdict
+
+from geometry import rotmat_to_rot6d
 
 from tqdm import tqdm
-
-sys.modules["data_types"] = data_types
 
 Meta = Tuple[str, str, str, str]
 T = TypeVar("T")
@@ -130,29 +130,31 @@ class TetonDataset(Dataset):
     def __len__(self):
         return len(self.paths)
 
-    def __getitem__(
-        self, index
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        base_path = self.paths[index]
+    def __getitem__(self, index) -> dict:
+        path = self.paths[index]
 
-        if self.cache and os.path.exists(os.path.join(base_path, "cache.pkl")):
-            out = pickle.load(open(os.path.join(base_path, "cache.pkl"), "rb"))
+        if self.cache and os.path.exists(os.path.join(path, "cache.pkl")):
+            data = pickle.load(open(os.path.join(path, "cache.pkl"), "rb"))
             if self.augment:
-                out = self.augment(out)
-            return out
+                data = self.augment(data)
+            return data
 
-        motion_path = os.path.join(base_path, self.motion_filename)
+        motion_path = os.path.join(path, self.motion_filename)
 
         motion = torch.load(motion_path).float()
+        motion_mask, translation, global_orient, body_pose = motion.split(
+            [1, *SMPL_SIZES], dim=-1
+        )
 
-        motion_mask, motion = motion.split([1, SMPL_SIZE], dim=-1)
         motion_mask = motion_mask.squeeze(-1).bool()
+        global_orient = global_orient.view(*motion_mask.shape, 3, 3)
+        body_pose = body_pose.view(*motion_mask.shape, 23, 3, 3)
 
-        classes_path = os.path.join(base_path, "class.pt")
-        actions_path = os.path.join(base_path, "action.pt")
-        object_points_path = os.path.join(base_path, "object_points_transformed.pt")
-        description_tokens_path = os.path.join(base_path, "description_tokens.pt")
-        description_embs_path = os.path.join(base_path, "description_embs.pt")
+        classes_path = os.path.join(path, "class.pt")
+        actions_path = os.path.join(path, "action.pt")
+        object_points_path = os.path.join(path, "object_points_transformed.pt")
+        description_tokens_path = os.path.join(path, "description_tokens.pt")
+        description_embs_path = os.path.join(path, "description_embs.pt")
 
         classes = torch.load(classes_path) if os.path.exists(classes_path) else None
         actions = torch.load(actions_path) if os.path.exists(actions_path) else None
@@ -181,27 +183,146 @@ class TetonDataset(Dataset):
             else None
         )
 
-        out = (
-            motion,
-            motion_mask,
-            classes,
-            actions,
-            object_points,
-            object_points_mask,
-            description_tokens,
-            description_embs,
-        )
+        data = {
+            # "path": path,
+            "translation": translation,
+            "global_orient": global_orient,
+            "body_pose": body_pose,
+            "motion_mask": motion_mask,
+            "classes": classes,
+            "actions": actions,
+            "object_points": object_points,
+            "object_points_mask": object_points_mask,
+            "description_tokens": description_tokens,
+            "description_embs": description_embs,
+        }
 
         if self.transform:
-            out = self.transform(out)
+            data = self.transform(data)
 
         if self.cache:
-            pickle.dump(out, open(os.path.join(base_path, "cache.pkl"), "wb"))
+            pickle.dump(data, open(os.path.join(path, "cache.pkl"), "wb"))
 
         if self.augment:
-            out = self.augment(out)
+            data = self.augment(data)
 
-        return out
+        return data
+
+
+class AppendSMPLJoints:
+    def __init__(self, smpl: SMPLLayer):
+        self.smpl = smpl
+
+    def __call__(self, data: dict) -> dict:
+        translation = data["translation"]
+        global_orient = data["global_orient"]
+        body_pose = data["body_pose"]
+
+        smpl_out = self.smpl.forward(
+            global_orient=global_orient.view(-1, 3, 3),
+            body_pose=body_pose.view(-1, 23, 3, 3),
+            transl=translation.view(-1, 3),
+            return_verts=False,
+            return_full_pose=False,
+        )
+
+        joints = smpl_out.joints.view(*translation.shape[:-1], -1, 3)[..., :24, :]
+
+        return {**data, "joints": joints}
+
+
+class AppendJointVelocities:
+    def __call__(self, data: dict) -> dict:
+        joints = data["joints"]
+        joint_vels = joints[:, 1:] - joints[:, :-1]
+
+        return {**data, "joint_vels": joint_vels}
+
+
+class AppendRandomCamera:
+    def __call__(self, data: dict) -> dict:
+        # Pick random camera elevation and radius
+        cam_r = torch.rand(1) * 9 + 1  # From 1 to 10 meters
+        cam_h = torch.rand(1) * 4.5 - 0.5  # From -0.5 to 4 meters
+
+        cam_rot = torch.rand(1) * 2 * torch.pi
+
+        # Camera is looking in the y- direction. left right is x and up and down is z.
+        cam_pos = torch.tensor(
+            [cam_r * torch.sin(cam_rot), cam_r * torch.cos(cam_rot), cam_h]
+        )
+
+        # Compute angle from camera to person with some noise
+        cam_tilt = (
+            -torch.pi / 2
+            - torch.atan(cam_h / (cam_r + 1e-6))
+            + torch.randn(1) * 0.05 * torch.pi
+        )
+
+        cam_roll = torch.randn(1) * 0.01 * torch.pi
+        cam_azim = torch.randn(1) * 0.01 * torch.pi + cam_rot
+
+        cam_R = torch.from_numpy(
+            R.from_euler(
+                "xyz",
+                torch.cat((cam_tilt, cam_azim, cam_roll)),
+            ).as_matrix()
+        ).type_as(cam_pos)
+
+        cam_t = -cam_pos @ cam_R.T
+
+        dist = torch.norm(cam_pos)
+
+        # Random focal length
+        cam_f = torch.tensor([dist / 2]) + torch.randn(1) * 0.25
+
+        return {
+            **data,
+            "cam_R": cam_R,
+            "cam_t": cam_t,
+            "cam_f": cam_f,
+        }
+
+
+class AppendFootGroundContact:
+    def __call__(seof, data: dict) -> dict:
+        feet_ids = [7, 10, 8, 11]
+
+        joints = data["joints"]
+        joint_vels = data["joint_vels"]
+
+        feet_h = joints[..., feet_ids, 2]
+        feet_vels = joint_vels[..., feet_ids, :]
+        feet_vel = feet_vels.pow(2).sum(dim=-1)
+
+        foot_contact = (feet_vel < 0.001) & (
+            feet_h[:, :, 1:] < torch.Tensor([0.12, 0.05, 0.12, 0.05])
+        )
+
+        return {**data, "foot_contact": foot_contact}
+
+
+class AppendRenderedKeypoints:
+    def __call__(self, data: dict) -> dict:
+        joints = data["joints"]
+        cam_R = data["cam_R"]
+        cam_t = data["cam_t"]
+        cam_f = data["cam_f"]
+
+        # Translate joints to camera space
+        joints_cam = joints @ cam_R.T + cam_t[None, None, :]
+
+        # Project joints
+        kpts = joints_cam[..., :2] / (joints_cam[..., 2:3] + 1e-6) * cam_f
+
+        origin_cam = torch.zeros(3) @ cam_R.T + cam_t
+        origin_kpt = origin_cam[:2] / (origin_cam[2] + 1e-6) * cam_f
+
+        return {
+            **data,
+            "kpts": kpts,
+            "origin_kpt": origin_kpt,
+        }
 
 
 class ToNonCannonical:
@@ -248,148 +369,72 @@ class ToNonCannonical:
 
 
 class ChooseRandomDescription:
-    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
-        *rest, description_tokens, description_embs = data
+    def __call__(self, data: dict) -> dict:
+        if "description_tokens" not in data or "description_embs" not in data:
+            return data
 
-        if description_tokens is None or description_embs is None:
-            return *rest, None, None
+        description_tokens = data["description_tokens"]
+        description_embs = data["description_embs"]
 
         # Choose random index
         idx = random.randrange(0, len(description_tokens))
-        return *rest, description_tokens[idx], description_embs[idx]
+
+        return {
+            **data,
+            "description_token": description_tokens[idx],
+            "description_emb": description_embs[idx],
+        }
 
 
-class RandomTranslate:
-    def __init__(self, max_x=0.5, max_y=0.5, max_z=0.0):
-        self.max_x = max_x
-        self.max_y = max_y
-        self.max_z = max_z
+class ToRepresentation:
+    def __call__(self, data: dict) -> dict:
+        joints = data["joints"]
+        joint_vels = data["joint_vels"]
+        body_pose = data["body_pose"]
+        foot_contact = data["foot_contact"]
 
-    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
-        motion, motion_mask, classes, actions, object_points, *rest = data
-        joints, joint_vels, pose = motion.split(
+        body_pose_6d = rotmat_to_rot6d(body_pose)
+
+        P, _, J, D = joints.shape
+        x = torch.cat(
             (
-                SMPL_JOINTS_SIZE,
-                SMPL_JOINTS_SIZE,
-                SMPL_6D_SIZES[-1],  # 6D pose
+                joints.flatten(start_dim=-2),
+                torch.cat(
+                    (torch.zeros(P, 1, J, D), joint_vels),
+                    dim=1,
+                ).flatten(start_dim=-2),
+                body_pose_6d.flatten(start_dim=-3),
+                torch.cat(
+                    (torch.zeros_like(foot_contact[:, :1]), foot_contact), dim=1
+                ).flatten(start_dim=-1),
             ),
             dim=-1,
         )
 
-        joints = joints.view(joints.shape[:-1] + SMPL_JOINTS_DIMS[0])
+        mask = data["motion_mask"]
 
-        # Translate the joints
-        translation = (torch.rand(3) * 2 - 1) * torch.tensor(
-            [self.max_x, self.max_y, self.max_z]
-        )
-
-        joints_translated = joints + translation
-        object_points_translated = (
-            (object_points + translation) if object_points is not None else None
-        )
-
-        motion_translated = torch.cat(
-            (
-                joints_translated.view(*motion.shape[:-1], -1),
-                joint_vels,
-                pose,
-            ),
-            dim=-1,
-        )
-
-        return (
-            motion_translated,
-            motion_mask,
-            classes,
-            actions,
-            object_points_translated,
-            *rest,
-        )
-
-
-class RandomRotate:
-    def __init__(self, max_angle=360):
-        self.max_angle = max_angle
-
-    def __call__(self, data: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
-        motion, motion_mask, classes, actions, object_points, *rest = data
-        joints, joint_vels, pose = motion.split(
-            (
-                SMPL_JOINTS_SIZE,
-                SMPL_JOINTS_SIZE,
-                SMPL_6D_SIZES[-1],  # 6D pose
-            ),
-            dim=-1,
-        )
-
-        joints = joints.view(joints.shape[:-1] + SMPL_JOINTS_DIMS[0])
-        joint_vels = joint_vels.view(joint_vels.shape[:-1] + SMPL_JOINTS_DIMS[0])
-
-        # Rotate the joints
-        r = R.from_euler("z", torch.rand(1) * self.max_angle, degrees=True)
-        rotmat = r.as_matrix()[0]
-
-        joints_rotated = (joints @ rotmat.T).type(joints.dtype)
-        joint_vels_rotated = (joint_vels @ rotmat.T).type(joint_vels.dtype)
-
-        object_points_rotated = (
-            (object_points @ rotmat.T).type(object_points.dtype)
-            if object_points is not None
-            else None
-        )
-
-        motion_rotated = torch.cat(
-            (
-                joints_rotated.view(*motion.shape[:-1], -1),
-                joint_vels_rotated.view(*motion.shape[:-1], -1),
-                pose,
-            ),
-            dim=-1,
-        )
-
-        return (
-            motion_rotated,
-            motion_mask,
-            classes,
-            actions,
-            object_points_rotated,
-            *rest,
-        )
+        return {**data, "x": x, "mask": mask}
 
 
 def collate_pose_annotations(
-    batch: List[
-        Tuple[
-            torch.Tensor,  # motion
-            torch.Tensor,  # mask
-            Optional[torch.Tensor],  # classes
-            Optional[torch.Tensor],  # actions
-            Optional[torch.Tensor],  # object_points
-        ]
-    ]
-):
-    batch_size = len(batch)
+    data: List[dict[str, Optional[torch.Tensor]]]
+) -> dict[str, Optional[torch.Tensor]]:
+    batch_size = len(data)
+    batch = {}
 
-    outs = []
-    for inpts in zip(*batch):
-        non_none_inpts = [inp for inp in inpts if inp is not None]
-        if not non_none_inpts:
-            outs.append(None)
+    # Collate all tensors in the batch
+    for k in set(k for d in data for k in d.keys()):
+        xs = [(i, d[k]) for i, d in enumerate(data) if k in d and d[k] is not None]
+        if not xs:
             continue
 
-        max_dims = [max(dim) for dim in zip(*[inp.shape for inp in non_none_inpts])]
-
-        out = torch.zeros(
+        max_dims = [max(dim) for dim in zip(*[x.shape for (_, x) in xs])]
+        batch[k] = torch.zeros(
             (batch_size, *max_dims),
-            device=non_none_inpts[0].device,
-            dtype=non_none_inpts[0].dtype,
+            device=xs[0][1].device,
+            dtype=xs[0][1].dtype,
         )
-        for i, inp in enumerate(inpts):
-            if inp is None:
-                continue
+        for i, d in xs:
+            batch[k][i, *[slice(0, dim) for dim in d.shape]] = d
 
-            out[i, *[slice(0, dim) for dim in inp.shape]] = inp
-
-        outs.append(out)
-
-    return outs
+    return batch

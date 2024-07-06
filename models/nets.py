@@ -1,10 +1,13 @@
 import torch
 
+from models.smpl import SMPL_SKELETON
 from models.utils import *
 from models.cfg_sampler import ClassifierFreeSampleModel
 from models.blocks import *
 from utils.utils import *
 from smplx import SMPLLayer
+
+from scipy.spatial.transform import Rotation as R
 
 from models.gaussian_diffusion import (
     MotionDiffusion,
@@ -118,9 +121,15 @@ class InterDenoiser(nn.Module):
         self.max_num_people = max_num_people
         self.points_group_size = points_group_size
 
-        self.pos_enc = PositionalEncoding(self.latent_dim, dropout=0)
-        self.emb_pos = TimestepEmbedder(self.latent_dim, self.pos_enc)
-        self.emb_t = TimestepEmbedder(self.latent_dim, self.pos_enc)
+        self.emb_pos = TimestepEmbedder(
+            self.latent_dim,
+            PositionalEncoding(self.latent_dim, dropout=0, max_len=5000),
+        )
+
+        self.emb_t = TimestepEmbedder(
+            self.latent_dim,
+            PositionalEncoding(self.latent_dim, dropout=0, max_len=1000),
+        )
 
         self.emb_id = nn.Embedding(max_num_people + 1, self.latent_dim)
 
@@ -142,19 +151,6 @@ class InterDenoiser(nn.Module):
         self.emb_points_group = nn.Linear(points_group_size * 3, self.latent_dim)
 
         self.unemb_motion = nn.Linear(self.latent_dim, self.input_feats)
-
-        # self.blocks = nn.ModuleList()
-        # for i in range(num_layers):
-        #     self.blocks.append(
-        #         TransformerBlock(
-        #             num_heads=num_heads,
-        #             latent_dim=latent_dim,
-        #             dropout=dropout,
-        #             ff_size=ff_size,
-        #         )
-        #     )
-        # # Output Module
-        # self.out = zero_module(FinalLayer(self.latent_dim, self.input_feats))
 
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -178,11 +174,9 @@ class InterDenoiser(nn.Module):
         classes: Optional[torch.Tensor] = None,
         actions: Optional[torch.Tensor] = None,
         description_emb: Optional[torch.Tensor] = None,
-        object_points: Optional[torch.Tensor] = None,
         # Masks
         motion_mask: Optional[torch.Tensor] = None,
         description_mask: Optional[torch.Tensor] = None,
-        object_points_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, P, T = motion.shape[:3]
 
@@ -239,53 +233,15 @@ class InterDenoiser(nn.Module):
             mask_flat = torch.cat((desc_mask_flat, mask_flat), dim=1)
             in_flat = torch.cat((desc_emb_emb_flat, in_flat), dim=1)
 
-        if object_points is not None:
-            # Group points into 32
-            object_point_groups = object_points.split(64, dim=1)
-            object_point_group_masks = object_points_mask.split(64, dim=1)
-
-            point_group_embs = torch.stack(
-                [
-                    self.emb_points_group(
-                        torch.nn.functional.pad(
-                            object_points_group.flatten(start_dim=1),
-                            (
-                                0,
-                                (self.points_group_size - object_points_group.shape[1])
-                                * object_points_group.shape[2],
-                            ),
-                            "constant",
-                        )
-                    )
-                    for object_points_group in object_point_groups
-                ],
-                dim=1,
-            )
-
-            point_group_masks = torch.stack(
-                [
-                    torch.nn.functional.pad(
-                        object_points_mask.flatten(start_dim=1),
-                        (0, (self.points_group_size - object_points_mask.shape[1])),
-                        "constant",
-                    )
-                    for object_points_mask in object_point_group_masks
-                ],
-                dim=1,
-            ).any(dim=-1)
-
-            mask_flat = torch.cat((point_group_masks, mask_flat), dim=1)
-            in_flat = torch.cat((point_group_embs, in_flat), dim=1)
-
         # Reverse the mask due to : https://pytorch.org/docs/master/generated/torch.nn.Transformer.html#torch.nn.Transformer.forward
         # [src/tgt/memory]_key_padding_mask provides specified elements in the key to be ignored by the attention.
         # # If a BoolTensor is provided, the positions with the value of True will be ignored
         # while the position with the value of False will be unchanged.
         out_flat = self.transformer(in_flat, src_key_padding_mask=~mask_flat)
 
-        if object_points is not None:
-            # Pop the object points embedding
-            out_flat = out_flat[:, point_group_masks.shape[1] :]
+        # if torch.isnan(out_flat).any():
+        #     print("NAN in output")
+        #     raise ValueError("NAN in output")
 
         if description_emb is not None:
             # Pop the description embedding
@@ -364,36 +320,39 @@ class InterDiffusion(nn.Module):
         return cond * mask
 
     def compute_loss(self, batch, mean: torch.Tensor, std: torch.Tensor):
-        x_start = batch["motion"]
+        x_start: torch.Tensor = batch["x"]
+        mask = batch["mask"]
 
-        motion_mask = batch["motion_mask"]
+        batch_size, *_ = x_start.shape
 
-        classes = self.batch_cond_mask(batch["classes"])
-        actions = self.batch_cond_mask(batch["actions"])
-        object_points = batch["object_points"]
-        object_points_mask = self.batch_cond_mask(batch["object_points_mask"])
-        description_emb = batch["description_emb"]
-        description_mask = self.batch_cond_mask(batch["description_mask"])
+        cam_R = batch["cam_R"]
+        cam_t = batch["cam_t"]
+        cam_f = batch["cam_f"]
+        kpts = batch["kpts"]
 
-        t, _ = self.sampler.sample(x_start.shape[0], x_start.device)
+        kpts_mask = mask[..., None] & torch.all((-1 < kpts) & (kpts < 1), dim=-1)
+
+        # Randomly mask keypoints with 10% probability
+        kpts_mask = (
+            torch.rand(kpts_mask.shape, device=kpts_mask.device) > 0.1 * kpts_mask
+        )
+
+        t, weights = self.sampler.sample(batch_size, x_start.device)
         output = self.diffusion.training_losses(
             model=self.net,
-            smpl=self.smpl,
             x_start=x_start,
-            mask=motion_mask,
+            mask=mask,
+            weights=weights,
             t=t,
             t_bar=self.cfg.T_BAR,
             mean=mean,
             std=std,
-            model_kwargs={
-                "motion_mask": motion_mask,
-                "classes": classes,
-                "actions": actions,
-                "object_points": object_points,
-                "object_points_mask": object_points_mask,
-                "description_emb": description_emb,
-                "description_mask": description_mask,
-            },
+            cam_R=cam_R,
+            cam_t=cam_t,
+            cam_f=cam_f,
+            kpts=kpts,
+            kpts_mask=kpts_mask,
+            model_kwargs={"motion_mask": batch["motion_mask"]},
         )
         return output
 
@@ -419,15 +378,7 @@ class InterDiffusion(nn.Module):
             (num_batches, num_people, num_frames, self.nfeats),
             clip_denoised=False,
             progress=True,
-            model_kwargs={
-                "motion_mask": batch["motion_mask"],
-                "classes": batch["classes"],
-                "actions": batch["actions"],
-                "object_points": batch["object_points"],
-                "object_points_mask": batch["object_points_mask"],
-                "description_emb": batch["description_emb"],
-                "description_mask": batch["description_mask"],
-            },
+            model_kwargs={"motion_mask": batch["motion_mask"]},
         )
 
         return {"output": output}

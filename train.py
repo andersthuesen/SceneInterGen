@@ -56,31 +56,7 @@ class LitTrainModel(pl.LightningModule):
     def configure_optimizers(self):
         return self._configure_optim()
 
-    def forward(self, batch_data):
-        (
-            motion,
-            motion_mask,
-            classes,
-            actions,
-            object_points,
-            object_points_mask,
-            description_tokens,
-            description_embs,
-        ) = batch_data
-
-        batch = OrderedDict(
-            {
-                "motion": motion,
-                "motion_mask": motion_mask,
-                "classes": classes,
-                "actions": actions,
-                "object_points": object_points,
-                "object_points_mask": object_points_mask,
-                "description_tokens": description_tokens,
-                "description_embs": description_embs,
-            }
-        )
-
+    def forward(self, batch: dict):
         loss, loss_logs = self.model(batch)
         return loss, loss_logs
 
@@ -152,6 +128,17 @@ if __name__ == "__main__":
     )
 
     model = InterGen(model_cfg, mean, std)
+
+    # Remove after use
+    # ckpt = torch.load(
+    #     "checkpoints/IG-S-8/model/epoch=499-step=80500.ckpt", map_location="cpu"
+    # )
+    # for k in list(ckpt["state_dict"].keys()):
+    #     if "model" in k:
+    #         ckpt["state_dict"][k.replace("model.", "")] = ckpt["state_dict"].pop(k)
+    # model.load_state_dict(ckpt["state_dict"], strict=True)
+    # print("checkpoint state loaded!")
+
     litmodel = LitTrainModel(model, train_cfg)
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
