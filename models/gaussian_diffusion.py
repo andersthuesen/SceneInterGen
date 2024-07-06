@@ -1583,11 +1583,6 @@ class MotionDiffusion(GaussianDiffusion):
             "total": total_loss,
         }
 
-        # for k, v in losses.items():
-        #     if torch.isnan(v).any():
-        #         print(k, v)
-        #         raise ValueError(f"Loss {k} is NaN")
-
         return losses
 
     def condition_mean(self, cond_fn, *args, **kwargs):
