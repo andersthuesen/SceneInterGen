@@ -1520,6 +1520,12 @@ class MotionDiffusion(GaussianDiffusion):
                 mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
             )
 
+        foot_loss = w_mean(
+            t_mask[..., None, None, None] & vel_mask[..., None],
+            tgt_foot_contacts[:, :, 1:]
+            * pred_vels[..., [7, 10, 8, 11], :].pow(2).sum(dim=-1),
+        )
+
         # Transform joints to camera space
         pred_joints_cam = (
             pred_joints.flatten(start_dim=1, end_dim=-2) @ cam_R.mT + cam_t[:, None, :]
@@ -1554,9 +1560,9 @@ class MotionDiffusion(GaussianDiffusion):
         # We double the joint loss from 30 to 60 as InterGen sums the joint vel loss over two people
         reg_loss = (
             30 * vel_loss
+            + 30 * foot_loss
             + 10 * bone_length_loss
             + 3 * pairwise_dist_loss
-            # + 0.01 * kpts_loss
         )
 
         # Mask out regularization losses after t_bar
@@ -1564,6 +1570,7 @@ class MotionDiffusion(GaussianDiffusion):
 
         losses = {
             "MPJPE": mpjpe,
+            "foot_loss": foot_loss,
             "joint_loss": joint_loss,
             "kpts_loss": kpts_loss,
             "pose_loss": pose_loss,
