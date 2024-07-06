@@ -22,12 +22,17 @@ if __name__ == "__main__":
     means = []
     stds = []
 
-    for motion, mask, *_ in tqdm(
-        datamodule.train_dataloader(), desc="Computing mean and std"
-    ):
-        masked_motion = motion[mask]
-        mean = masked_motion.mean(dim=0)
-        std = masked_motion.std(dim=0)
+    i = 0
+    for data in tqdm(datamodule.train_dataloader(), desc="Computing mean and std"):
+        if i > 6000:
+            break
+        i += 1
+
+        x = data["x"]
+        mask = data["mask"]
+        masked = x[mask]
+        mean = masked.mean(dim=0)
+        std = masked.std(dim=0)
 
         if mean.isnan().any():
             print("mean is nan")

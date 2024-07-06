@@ -284,7 +284,7 @@ class AppendRandomCamera:
         }
 
 
-class AppendFootGroundContact:
+class AppendFootContacts:
     def __call__(seof, data: dict) -> dict:
         feet_ids = [7, 10, 8, 11]
 
@@ -296,7 +296,7 @@ class AppendFootGroundContact:
         feet_vel = feet_vels.pow(2).sum(dim=-1)
 
         foot_contact = (feet_vel < 0.001) & (
-            feet_h[:, :, 1:] < torch.Tensor([0.12, 0.05, 0.12, 0.05])
+            feet_h[:, 1:] < torch.Tensor([0.12, 0.05, 0.12, 0.05])
         )
 
         return {**data, "foot_contact": foot_contact}
@@ -394,6 +394,8 @@ class ToRepresentation:
         foot_contact = data["foot_contact"]
 
         body_pose_6d = rotmat_to_rot6d(body_pose)
+
+        print(joints.shape, joint_vels.shape, foot_contact.shape)
 
         P, _, J, D = joints.shape
         x = torch.cat(

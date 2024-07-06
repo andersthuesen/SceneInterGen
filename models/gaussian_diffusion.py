@@ -1402,23 +1402,19 @@ class MotionDiffusion(GaussianDiffusion):
         t_mask = t <= t_bar
 
         # Split out the data
-        #       joints              joint_vels          6D body_pose
-        SIZES = SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES + (23 * 3 * 2,)
+        #       joints              joint_vels          6D body_pose    foot_contacts
+        SIZES = SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES + (23 * 3 * 2,) + (4,)
 
-        (
-            tgt_joints,
-            tgt_vels_,
-            tgt_pose_6d,
-        ) = target.split(SIZES, dim=-1)
+        (tgt_joints, tgt_vels_, tgt_pose_6d, tgt_foot_contacts) = target.split(
+            SIZES, dim=-1
+        )
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
         tgt_vels_ = tgt_vels_.view(target.shape[:-1] + (-1, 3))
         tgt_pose_6d = tgt_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
-        (
-            pred_joints,
-            pred_vels_,
-            pred_pose_6d,
-        ) = pred.split(SIZES, dim=-1)
+        (pred_joints, pred_vels_, pred_pose_6d, pred_foot_contacts) = pred.split(
+            SIZES, dim=-1
+        )
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
         pred_vels_ = pred_vels_.view(pred.shape[:-1] + (-1, 3))
         pred_pose_6d = pred_pose_6d.view(target.shape[:-1] + (23, 3, 2))
