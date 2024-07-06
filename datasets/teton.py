@@ -134,10 +134,16 @@ class TetonDataset(Dataset):
         path = self.paths[index]
 
         if self.cache and os.path.exists(os.path.join(path, "cache.pkl")):
-            data = pickle.load(open(os.path.join(path, "cache.pkl"), "rb"))
-            if self.augment:
-                data = self.augment(data)
-            return data
+            try:
+                data = pickle.load(open(os.path.join(path, "cache.pkl"), "rb"))
+                if self.augment:
+                    data = self.augment(data)
+                return data
+            except EOFError as e:
+                print(f"Error loading cache: {e}")
+                print(f"Path: {path}")
+                print("Regenerating data...")
+                pass
 
         motion_path = os.path.join(path, self.motion_filename)
 
