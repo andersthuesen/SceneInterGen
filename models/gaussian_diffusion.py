@@ -19,7 +19,7 @@ from models.smpl import SMPL_SKELETON
 from utils.utils import *
 from utils.plot_script import *
 
-from torch.nn.functional import mse_loss
+from torch.nn.functional import mse_loss, cosine_similarity
 
 
 def w_mean(p: torch.Tensor, v: torch.Tensor, dim=None, eps=1e-6):
@@ -1520,10 +1520,43 @@ class MotionDiffusion(GaussianDiffusion):
                 mse_loss(pred_pairwise_dist, tgt_pairwise_dist, reduction="none"),
             )
 
+        # Foot ground contact loss
         foot_loss = w_mean(
             t_mask[..., None, None, None] & vel_mask[..., None],
             tgt_foot_contacts[:, :, 1:]
             * pred_vels[..., [7, 10, 8, 11], :].pow(2).sum(dim=-1),
+        )
+
+        # Relative Orientation (RO) loss
+        l_hip = 1
+        r_hip = 2
+
+        pred_across = pred_joints[..., l_hip, :] - pred_joints[..., r_hip, :]
+        tgt_across = tgt_joints[..., l_hip, :] - tgt_joints[..., r_hip, :]
+
+        # Transpose person / frame axes
+        pred_across_t = pred_across.transpose(1, 2)
+        tgt_across = tgt_across.transpose(1, 2)
+
+        # Compute pairwise bipartite orientations between joints
+        pred_cos_sim_pairs = cosine_similarity(
+            pred_across_t[..., None, :, :2], pred_across_t[..., None, :2], dim=-1
+        )
+
+        tgt_cos_sim_pairs = cosine_similarity(
+            tgt_across[..., None, :, :2], tgt_across[..., None, :2], dim=-1
+        )
+
+        # Transpose person / frame axes to
+        mask_t = mask.transpose(1, 2)
+
+        # Compute pairwise cosine similarity (angle between vectors)
+        mask_pairwise = mask_t[..., None, :] & mask_t[..., None]
+
+        ro_loss = w_mean(
+            t_mask[..., None, None, None] & mask_pairwise,
+            0.5 * mse_loss(pred_cos_sim_pairs, tgt_cos_sim_pairs, reduction="none"),
+            # Divide by 2 as we the cosine similarity is symmetric
         )
 
         # Transform joints to camera space
@@ -1563,6 +1596,7 @@ class MotionDiffusion(GaussianDiffusion):
             + 30 * foot_loss
             + 10 * bone_length_loss
             + 3 * pairwise_dist_loss
+            + ro_loss
         )
 
         # Mask out regularization losses after t_bar
@@ -1571,6 +1605,7 @@ class MotionDiffusion(GaussianDiffusion):
         losses = {
             "MPJPE": mpjpe,
             "foot_loss": foot_loss,
+            "ro_loss": ro_loss,
             "joint_loss": joint_loss,
             "kpts_loss": kpts_loss,
             "pose_loss": pose_loss,
