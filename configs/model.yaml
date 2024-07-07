@@ -6,7 +6,7 @@ INPUT_DIM: 286 # 24*3 joints + 24*3 velocities + 23*3*2 6D pose + 4 contact
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
-CHECKPOINT: /work3/s183926/checkpoints/UNCOND/model/epoch=49-step=8050.ckpt
+CHECKPOINT: /work3/s183926/checkpoints/UNCOND/model/epoch=99-step=16100-v1.ckpt
 SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
 
 DIFFUSION_STEPS: 1000

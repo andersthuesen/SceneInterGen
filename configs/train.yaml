@@ -4,7 +4,7 @@ GENERAL:
   LOG_DIR: ./log
 
 TRAIN:
-  LR: 2e-4
+  LR: 1e-4
   WEIGHT_DECAY: 0.00002
   BATCH_SIZE: 128
   EPOCH: 100

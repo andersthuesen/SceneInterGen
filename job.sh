@@ -31,5 +31,7 @@
 
 # here follow the commands you want to execute with input.in as the input file
 module load cuda/12.4.1 
+export PATH="/zhome/87/0/137565/miniconda3/bin:$PATH"
+. "/zhome/87/0/137565/miniconda3/etc/profile.d/conda.sh"
 conda activate teton
 python train.py

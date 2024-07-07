@@ -1596,7 +1596,7 @@ class MotionDiffusion(GaussianDiffusion):
             + 30 * foot_loss
             + 10 * bone_length_loss
             + 3 * pairwise_dist_loss
-            + ro_loss
+            + 0.01 * ro_loss
         )
 
         # Mask out regularization losses after t_bar
