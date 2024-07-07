@@ -121,15 +121,13 @@ class InterDenoiser(nn.Module):
         self.max_num_people = max_num_people
         self.points_group_size = points_group_size
 
-        self.emb_pos = TimestepEmbedder(
-            self.latent_dim,
-            PositionalEncoding(self.latent_dim, dropout=0, max_len=5000),
-        )
+        # 2000 accommodates both the 1000 diffusion timesteps and 200 seconds of motion generation.
+        # (training motion lenghts are 10s of 10fps = 100 frames in total)
+        self.pe = PositionalEncoding(self.latent_dim, dropout=0, max_len=2000)
 
-        self.emb_t = TimestepEmbedder(
-            self.latent_dim,
-            PositionalEncoding(self.latent_dim, dropout=0, max_len=1000),
-        )
+        self.emb_pos = TimestepEmbedder(self.latent_dim, self.pe)
+
+        self.emb_t = TimestepEmbedder(self.latent_dim, self.pe)
 
         self.emb_id = nn.Embedding(max_num_people + 1, self.latent_dim)
 

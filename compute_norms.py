@@ -22,12 +22,7 @@ if __name__ == "__main__":
     means = []
     stds = []
 
-    i = 0
     for data in tqdm(datamodule.train_dataloader(), desc="Computing mean and std"):
-        if i > 6000:
-            break
-        i += 1
-
         x = data["x"]
         mask = data["mask"]
         masked = x[mask]
