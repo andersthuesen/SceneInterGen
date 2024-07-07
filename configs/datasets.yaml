@@ -1,14 +1,14 @@
 humanml3d:
     NAME: humanml3d
-    DATA_ROOT: /data/anders/data/humanml3d
+    DATA_ROOT: /work3/s183926/data/humanml3d
     MOTION_FILENAME: motion.pt
-    CACHE: False
+    CACHE: True
 
 interhuman:
     NAME: interhuman
-    DATA_ROOT: /data/anders/data/interhuman/subset/
+    DATA_ROOT: /work3/s183926/data/interhuman
     MOTION_FILENAME: motion.pt
-    CACHE: False
+    CACHE: True
 
 # teton:
 #     NAME: teton
