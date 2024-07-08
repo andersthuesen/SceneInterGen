@@ -105,9 +105,11 @@ class DataModule(pl.LightningDataModule):
                             AppendRenderedKeypoints(),
                             ToRepresentation(),
                         ]
-                        + [Normalize(self.mean, self.std)]
-                        if self.mean is not None and self.std is not None
-                        else []
+                        + (
+                            [Normalize(self.mean, self.std)]
+                            if self.mean is not None and self.std is not None
+                            else []
+                        )
                     )
                 ),
                 motion_filename=dataset_cfg.MOTION_FILENAME,

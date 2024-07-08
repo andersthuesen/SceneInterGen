@@ -14,7 +14,7 @@ if __name__ == "__main__":
         model_path=model_cfg.SMPL_MODEL_PATH,
     )
 
-    datamodule = DataModule(data_cfg, 1, train_cfg.TRAIN.NUM_WORKERS, smpl)
+    datamodule = DataModule(data_cfg, 128, train_cfg.TRAIN.NUM_WORKERS, smpl)
 
     # Use this code to calculate mean and std
     datamodule.setup()

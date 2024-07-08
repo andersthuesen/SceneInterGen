@@ -91,10 +91,13 @@ class MotionEncoder(nn.Module):
 class InterDenoiser(nn.Module):
     def __init__(
         self,
-        num_features,
-        num_classes,
-        num_actions,
-        max_num_people=16,
+        motion_dim: int,
+        cam_ext_dim: int,
+        desc_dim: int,
+        kpts_dim: int,
+        num_classes: int,
+        num_actions: int,
+        max_num_people: int = 16,
         bias=False,
         latent_dim=1024,
         num_frames=240,
@@ -116,10 +119,12 @@ class InterDenoiser(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.activation = activation
-        self.input_feats = num_features
         self.bias = bias
         self.max_num_people = max_num_people
         self.points_group_size = points_group_size
+
+        self.motion_dim = motion_dim
+        self.cam_ext_dim = cam_ext_dim
 
         # 2000 accommodates both the 1000 diffusion timesteps and 200 seconds of motion generation.
         # (training motion lenghts are 10s of 10fps = 100 frames in total)
@@ -129,7 +134,11 @@ class InterDenoiser(nn.Module):
 
         self.emb_t = TimestepEmbedder(self.latent_dim, self.pe)
 
+        self.emb_cam_ext = nn.Linear(cam_ext_dim, self.latent_dim)
+
+        self.emb_kpts = nn.Linear(kpts_dim, self.latent_dim)
         self.emb_id = nn.Embedding(max_num_people + 1, self.latent_dim)
+
 
         # Add an extra identity for the no conditioning case
         self.emb_class = nn.Embedding(num_classes + 1, self.latent_dim)
@@ -141,14 +150,16 @@ class InterDenoiser(nn.Module):
         self.emb_action.weight.data[0].fill_(0.0)
 
         # Input Embedding
-        self.emb_motion = nn.Linear(self.input_feats, self.latent_dim)
+        self.emb_motion = nn.Linear(motion_dim, self.latent_dim)
 
         # Embed the description
-        self.emb_desc = nn.Linear(768, self.latent_dim)
+        self.emb_desc = nn.Linear(desc_dim, self.latent_dim)
 
         self.emb_points_group = nn.Linear(points_group_size * 3, self.latent_dim)
 
-        self.unemb_motion = nn.Linear(self.latent_dim, self.input_feats)
+        self.unemb_motion = nn.Linear(self.latent_dim, motion_dim)
+
+        self.unemb_cam_ext = nn.Linear(self.latent_dim, cam_ext_dim)
 
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -166,24 +177,30 @@ class InterDenoiser(nn.Module):
     def forward(
         self,
         # Required
-        motion: torch.Tensor,
+        x: torch.Tensor,
         timesteps: torch.Tensor,
         # Conditioning
+        kpts: Optional[torch.Tensor] = None,
         classes: Optional[torch.Tensor] = None,
         actions: Optional[torch.Tensor] = None,
         description_emb: Optional[torch.Tensor] = None,
         # Masks
         motion_mask: Optional[torch.Tensor] = None,
         description_mask: Optional[torch.Tensor] = None,
+        kpts_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        B, P, T = motion.shape[:3]
+        B, P, T = x.shape[:3]
+
+        motion, cam_ext = x.split((
+            self.motion_dim, self.cam_ext_dim
+        ), dim=-1)
+
+        pos_emb = self.emb_pos(torch.arange(T, device=motion.device, dtype=torch.long))
 
         motion_emb = (
             self.emb_motion(motion)
             # Embed position
-            + self.emb_pos(torch.arange(T, device=motion.device, dtype=torch.long))[
-                None, None, :, :
-            ]
+            + pos_emb[None, None, :, :]
             # Embed identity (Generate a random "id" for each person)
             + self.emb_id(
                 torch.randperm(self.max_num_people, device=motion.device)[:P]
@@ -195,6 +212,11 @@ class InterDenoiser(nn.Module):
 
         if actions is not None:
             motion_emb[..., : actions.shape[-1], :] += self.emb_action(actions)
+
+        if kpts is not None and kpts_mask is not None:
+            # All kpts are within the frame.
+            all_kpts_mask = kpts_mask.all(dim=-1)
+            motion_emb[all_kpts_mask] += self.emb_kpts(kpts.flatten(start_dim=-2))[all_kpts_mask]
 
         # Prepare for transformer
         motion_emb_flat = rearrange(motion_emb, "B P T D -> B (P T) D")
@@ -224,6 +246,22 @@ class InterDenoiser(nn.Module):
         # Apply transformer
         in_flat = torch.cat((t_emb, motion_emb_flat), dim=1)
 
+        # Assume same static camera extrinsics for all people and frames
+        cam_ext = cam_ext.mean(dim=(1, 2))
+        cam_ext_emb = self.emb_cam_ext(cam_ext)
+
+        cam_ext_emb_flat = cam_ext_emb.unsqueeze(1)
+
+        mask_flat = torch.cat((
+            torch.ones_like(cam_ext_emb_flat[..., 0], dtype=torch.bool),
+            mask_flat
+        ), dim=1)
+
+        in_flat = torch.cat((
+            cam_ext_emb_flat,
+            in_flat
+        ), dim=1)
+
         if description_emb is not None:
             desc_emb_emb_flat = self.emb_desc(description_emb).unsqueeze(1)
             desc_mask_flat = description_mask.unsqueeze(1)
@@ -245,20 +283,31 @@ class InterDenoiser(nn.Module):
             # Pop the description embedding
             out_flat = out_flat[:, 1:]
 
+        # Pop the camera extrinsics
+        cam_ext_emb_out, out_flat = out_flat[:, 0], out_flat[:, 1:]
+
         # Pop the timestep embedding
-        out_flat = out_flat[:, 1:]
+        _, motion_emb_flat_out = out_flat[:, 0], out_flat[:, 1:]
 
-        # Rearrange back to the original shape
-        out = rearrange(out_flat, "B (P T) D -> B P T D", P=P)
+        # Rearrange motion back to its original shape
+        motion_emb_out = rearrange(motion_emb_flat_out, "B (P T) D -> B P T D", P=P)
 
-        return self.unemb_motion(out)
+        motion_out = self.unemb_motion(motion_emb_out)
+        cam_ext_out = self.unemb_cam_ext(cam_ext_emb_out)
+
+        # Combine motion and camera extrinsics again
+        x_out = torch.cat((
+            motion_out,
+            cam_ext_out[:, None, None, :].repeat(1, P, T, 1)
+        ), dim=-1)
+
+        return x_out
 
 
 class InterDiffusion(nn.Module):
     def __init__(self, cfg, sampling_strategy="ddim50"):
         super().__init__()
         self.cfg = cfg
-        self.nfeats = cfg.INPUT_DIM
         self.latent_dim = cfg.LATENT_DIM
         self.ff_size = cfg.FF_SIZE
         self.num_layers = cfg.NUM_LAYERS
@@ -266,8 +315,6 @@ class InterDiffusion(nn.Module):
         self.dropout = cfg.DROPOUT
         self.activation = cfg.ACTIVATION
         self.motion_rep = cfg.MOTION_REP
-        self.num_actions = cfg.NUM_ACTIONS
-        self.num_classes = cfg.NUM_CLASSES
 
         self.cfg_weight = cfg.CFG_WEIGHT
         self.diffusion_steps = cfg.DIFFUSION_STEPS
@@ -276,9 +323,12 @@ class InterDiffusion(nn.Module):
         self.sampling_strategy = sampling_strategy
 
         self.net = InterDenoiser(
-            num_features=self.nfeats,
-            num_classes=self.num_classes,
-            num_actions=self.num_actions,
+            motion_dim=cfg.MOTION_DIM,
+            cam_ext_dim=cfg.CAM_EXT_DIM,
+            desc_dim=cfg.DESC_DIM,
+            kpts_dim=cfg.KPTS_DIM,
+            num_classes=cfg.NUM_CLASSES,
+            num_actions=cfg.NUM_ACTIONS,
             latent_dim=self.latent_dim,
             ff_size=self.ff_size,
             num_layers=self.num_layers,
@@ -288,7 +338,6 @@ class InterDiffusion(nn.Module):
             cfg_weight=self.cfg_weight,
         )
 
-        self.diffusion_steps = self.diffusion_steps
         self.betas = get_named_beta_schedule(self.beta_scheduler, self.diffusion_steps)
 
         timestep_respacing = [self.diffusion_steps]
@@ -323,17 +372,10 @@ class InterDiffusion(nn.Module):
 
         batch_size, *_ = x_start.shape
 
-        cam_R = batch["cam_R"]
-        cam_t = batch["cam_t"]
         cam_f = batch["cam_f"]
         kpts = batch["kpts"]
 
         kpts_mask = mask[..., None] & torch.all((-1 < kpts) & (kpts < 1), dim=-1)
-
-        # Randomly mask keypoints with 10% probability
-        kpts_mask = (
-            torch.rand(kpts_mask.shape, device=kpts_mask.device) > 0.1 * kpts_mask
-        )
 
         t, weights = self.sampler.sample(batch_size, x_start.device)
         output = self.diffusion.training_losses(
@@ -345,12 +387,14 @@ class InterDiffusion(nn.Module):
             t_bar=self.cfg.T_BAR,
             mean=mean,
             std=std,
-            cam_R=cam_R,
-            cam_t=cam_t,
             cam_f=cam_f,
             kpts=kpts,
             kpts_mask=kpts_mask,
-            model_kwargs={"motion_mask": batch["motion_mask"]},
+            model_kwargs={
+                "motion_mask": batch["motion_mask"],
+                "kpts": kpts,
+                "kpts_mask": kpts_mask
+            },
         )
         return output
 

@@ -401,7 +401,16 @@ class ToRepresentation:
 
         body_pose_6d = rotmat_to_rot6d(body_pose)
 
-        P, _, J, D = joints.shape
+        cam_R = data["cam_R"]
+        cam_R_6d = rotmat_to_rot6d(cam_R)
+        cam_t = data["cam_t"]
+
+        cam_ext = torch.cat((
+            cam_R_6d.flatten(start_dim=-2),
+            cam_t
+        ), dim=-1)
+
+        P, T, J, D = joints.shape
         x = torch.cat(
             (
                 joints.flatten(start_dim=-2),
@@ -413,6 +422,7 @@ class ToRepresentation:
                 torch.cat((torch.zeros(P, 1, 4), foot_contact), dim=1).flatten(
                     start_dim=-1
                 ),
+                cam_ext[None, None].repeat(P, T, 1)
             ),
             dim=-1,
         )

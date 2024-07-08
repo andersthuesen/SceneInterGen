@@ -24,8 +24,8 @@ class InterGen(nn.Module):
         )
         self.clip_ln = nn.LayerNorm(768)
 
-        self.register_buffer("mean", mean)
-        self.register_buffer("std", std)
+        self.register_buffer("mean", mean, persistent=False)
+        self.register_buffer("std", std, persistent=False)
 
     def compute_loss(self, batch):
         # batch = self.text_process(batch)

@@ -1,5 +1,5 @@
 GENERAL:
-  EXP_NAME: UNCOND
+  EXP_NAME: KEYPOINT
   CHECKPOINT: /work3/s183926/checkpoints
   LOG_DIR: ./log
 
@@ -7,7 +7,7 @@ TRAIN:
   LR: 1e-4
   WEIGHT_DECAY: 0.00002
   BATCH_SIZE: 128
-  EPOCH: 100
+  EPOCH: 200
   LOG_STEPS: 10
   SAVE_EPOCH: 10
   RESUME: #/work3/s183926/checkpoints/UNCOND/model/epoch=29-step=9690.ckpt

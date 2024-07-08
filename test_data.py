@@ -30,11 +30,11 @@ if __name__ == "__main__":
 
     datamodule = DataModule(
         data_cfg,
-        1,
+        4,
         1,
         smpl,
-        mean,
-        std,
+        # mean,
+        # std,
     )
     datamodule.setup()
 
@@ -44,23 +44,28 @@ if __name__ == "__main__":
 
     # print("yolo", smpl_out.joints.shape)
 
-    feet_ids = [7, 10, 8, 11]
+    # feet_ids = [7, 10, 8, 11]
 
     for batch in dataloader:
-        joints = batch["joints"]
-        joint_vels = batch["joint_vels"]
+        print(batch.keys())
+        x = batch["x"]
+        print(x[..., -9:].mean(dim=(1, 2)))
+        break
 
-        feet_h = joints[..., feet_ids, 2]
-        feet_vels = joint_vels[..., feet_ids, :]
-        feet_vel = feet_vels.pow(2).sum(dim=-1)
+        # joints = batch["joints"]
+        # joint_vels = batch["joint_vels"]
 
-        contact = (feet_vel < 0.001) & (
-            feet_h[:, :, 1:] < torch.Tensor([0.12, 0.05, 0.12, 0.05])
-        )
+        # feet_h = joints[..., feet_ids, 2]
+        # feet_vels = joint_vels[..., feet_ids, :]
+        # feet_vel = feet_vels.pow(2).sum(dim=-1)
 
-        plt.figure()
-        for c in contact[0]:
-            plt.plot(c)
+        # contact = (feet_vel < 0.001) & (
+        #     feet_h[:, :, 1:] < torch.Tensor([0.12, 0.05, 0.12, 0.05])
+        # )
+
+        # plt.figure()
+        # for c in contact[0]:
+        #     plt.plot(c)
             # feet_vels = p[..., feet_ids, :]
             # feet_pos = p[..., feet_ids, :]
 
