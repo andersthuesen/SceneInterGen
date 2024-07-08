@@ -2,11 +2,14 @@ NAME: InterGen
 NUM_LAYERS: 16
 NUM_HEADS: 16
 DROPOUT: 0.1
-INPUT_DIM: 282 # 24*3 joints + 24*3 velocities + 23*3*2 6D pose
+MOTION_DIM: 286 # 24*3 joints + 24*3 velocities + 23*3*2 6D pose + 4 contact
+CAM_EXT_DIM: 9 # 6 (6D) camera orientation + 3 camera translation
+DESC_DIM: 768
+KPTS_DIM: 48
 LATENT_DIM: 1024
 FF_SIZE: 2048
 ACTIVATION: gelu
-CHECKPOINT: checkpoints/IG-S-8/epoch=499-step=80500.ckpt
+CHECKPOINT: /work3/s183926/checkpoints/UNCOND/model/epoch=99-step=16100-v1.ckpt
 SMPL_MODEL_PATH: weights/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl
 
 DIFFUSION_STEPS: 1000

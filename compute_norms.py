@@ -14,7 +14,7 @@ if __name__ == "__main__":
         model_path=model_cfg.SMPL_MODEL_PATH,
     )
 
-    datamodule = DataModule(data_cfg, 1, train_cfg.TRAIN.NUM_WORKERS, smpl)
+    datamodule = DataModule(data_cfg, 128, train_cfg.TRAIN.NUM_WORKERS, smpl)
 
     # Use this code to calculate mean and std
     datamodule.setup()
@@ -22,12 +22,12 @@ if __name__ == "__main__":
     means = []
     stds = []
 
-    for motion, mask, *_ in tqdm(
-        datamodule.train_dataloader(), desc="Computing mean and std"
-    ):
-        masked_motion = motion[mask]
-        mean = masked_motion.mean(dim=0)
-        std = masked_motion.std(dim=0)
+    for data in tqdm(datamodule.train_dataloader(), desc="Computing mean and std"):
+        x = data["x"]
+        mask = data["mask"]
+        masked = x[mask]
+        mean = masked.mean(dim=0)
+        std = masked.std(dim=0)
 
         if mean.isnan().any():
             print("mean is nan")

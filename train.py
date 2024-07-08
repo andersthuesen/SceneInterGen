@@ -56,31 +56,7 @@ class LitTrainModel(pl.LightningModule):
     def configure_optimizers(self):
         return self._configure_optim()
 
-    def forward(self, batch_data):
-        (
-            motion,
-            motion_mask,
-            classes,
-            actions,
-            object_points,
-            object_points_mask,
-            description_tokens,
-            description_embs,
-        ) = batch_data
-
-        batch = OrderedDict(
-            {
-                "motion": motion,
-                "motion_mask": motion_mask,
-                "classes": classes,
-                "actions": actions,
-                "object_points": object_points,
-                "object_points_mask": object_points_mask,
-                "description_tokens": description_tokens,
-                "description_embs": description_embs,
-            }
-        )
-
+    def forward(self, batch: dict):
         loss, loss_logs = self.model(batch)
         return loss, loss_logs
 
@@ -102,33 +78,10 @@ class LitTrainModel(pl.LightningModule):
     def on_train_batch_end(self, outputs, batch, batch_idx):
         self.log_dict(outputs["loss_logs"], on_step=True, on_epoch=False, prog_bar=True)
 
-        # if outputs.get("skip_batch") or not outputs.get("loss_logs"):
-        #     return
-
-        # if self.global_step % self.cfg.TRAIN.LOG_STEPS == 0 and self.device.index == 0:
-        #     print_current_loss(
-        #         self.start_time,
-        #         self.global_step,
-        #         outputs["loss_logs"],
-        #         self.trainer.current_epoch,
-        #         inner_iter=batch_idx,
-        #         lr=self.trainer.optimizers[0].param_groups[0]["lr"],
-        #     )
-
     def on_train_epoch_end(self):
-        # pass
         sch = self.lr_schedulers()
         if sch is not None:
             sch.step()
-
-    # def save(self, file_name):
-    #     state = {}
-    #     try:
-    #         state["model"] = self.model.module.state_dict()
-    #     except:
-    #         state["model"] = self.model.state_dict()
-    #     torch.save(state, file_name, _use_new_zipfile_serialization=False)
-    #     return
 
 
 if __name__ == "__main__":
@@ -152,6 +105,17 @@ if __name__ == "__main__":
     )
 
     model = InterGen(model_cfg, mean, std)
+
+    # Remove after use
+    ckpt = torch.load(
+        "/work3/s183926/checkpoints/UNCOND/model/epoch=99-step=16100-v1.ckpt", map_location="cpu"
+    )
+    for k in list(ckpt["state_dict"].keys()):
+        if "model" in k:
+            ckpt["state_dict"][k.replace("model.", "")] = ckpt["state_dict"].pop(k)
+    model.load_state_dict(ckpt["state_dict"], strict=False)
+    print("checkpoint state loaded!")
+
     litmodel = LitTrainModel(model, train_cfg)
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(

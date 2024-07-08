@@ -24,11 +24,11 @@ class InterGen(nn.Module):
         )
         self.clip_ln = nn.LayerNorm(768)
 
-        self.register_buffer("mean", mean)
-        self.register_buffer("std", std)
+        self.register_buffer("mean", mean, persistent=False)
+        self.register_buffer("std", std, persistent=False)
 
     def compute_loss(self, batch):
-        batch = self.text_process(batch)
+        # batch = self.text_process(batch)
         losses = self.decoder.compute_loss(batch, self.mean, self.std)
         return losses["total"], losses
 
@@ -40,13 +40,13 @@ class InterGen(nn.Module):
         return self.compute_loss(batch)
 
     def forward_test(self, batch):
-        batch = self.text_process(batch)
+        # batch = self.text_process(batch)
         batch.update(self.decode_motion(batch))
         return batch
 
     def text_process(self, batch):
-        tokens: torch.Tensor = batch["description_tokens"]
-        embs: torch.Tensor = batch["description_embs"]
+        tokens: torch.Tensor = batch["description_token"]
+        embs: torch.Tensor = batch["description_emb"]
 
         if tokens is None or embs is None:
             batch["description_mask"] = None

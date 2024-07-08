@@ -131,12 +131,10 @@ def cli(prompt: str, p: int, f: int, device: str):
             "num_batches": 1,
             "num_people": num_people,
             "num_frames": num_frames,
-            "classes": None,
-            "actions": None,
-            "description_tokens": tokens.float(),
-            "description_embs": embs.float(),
-            "object_points": None,
-            "object_points_mask": None,
+            # "classes": None,
+            # "actions": None,
+            # "description_tokens": tokens.float(),
+            # "description_embs": embs.float(),
         }
     )
 
