@@ -156,14 +156,9 @@ class TetonDataset(Dataset):
         global_orient = global_orient.view(*motion_mask.shape, 3, 3)
         body_pose = body_pose.view(*motion_mask.shape, 23, 3, 3)
 
-        classes_path = os.path.join(path, "class.pt")
-        actions_path = os.path.join(path, "action.pt")
-        object_points_path = os.path.join(path, "object_points_transformed.pt")
         description_tokens_path = os.path.join(path, "description_tokens.pt")
         description_embs_path = os.path.join(path, "description_embs.pt")
 
-        classes = torch.load(classes_path) if os.path.exists(classes_path) else None
-        actions = torch.load(actions_path) if os.path.exists(actions_path) else None
         description_tokens = (
             torch.load(description_tokens_path)
             if os.path.exists(description_tokens_path)
@@ -175,30 +170,12 @@ class TetonDataset(Dataset):
             else None
         )
 
-        object_points = (
-            torch.load(object_points_path)
-            if os.path.exists(object_points_path)
-            else None
-        )
-
-        object_points_mask = (
-            torch.ones(
-                object_points.shape[0], dtype=torch.bool, device=object_points.device
-            )
-            if object_points is not None
-            else None
-        )
-
         data = {
             # "path": path,
             "translation": translation,
             "global_orient": global_orient,
             "body_pose": body_pose,
             "motion_mask": motion_mask,
-            "classes": classes,
-            "actions": actions,
-            "object_points": object_points,
-            "object_points_mask": object_points_mask,
             "description_tokens": description_tokens,
             "description_embs": description_embs,
         }
@@ -382,6 +359,9 @@ class ChooseRandomDescription:
         description_tokens = data["description_tokens"]
         description_embs = data["description_embs"]
 
+        if description_tokens is None or description_embs is None:
+            return {**data, "description_token": None, "description_emb": None}
+
         # Choose random index
         idx = random.randrange(0, len(description_tokens))
 
@@ -398,19 +378,9 @@ class ToRepresentation:
         joint_vels = data["joint_vels"]
         body_pose = data["body_pose"]
         foot_contact = data["foot_contact"]
-
         body_pose_6d = rotmat_to_rot6d(body_pose)
 
-        cam_R = data["cam_R"]
-        cam_R_6d = rotmat_to_rot6d(cam_R)
-        cam_t = data["cam_t"]
-
-        cam_ext = torch.cat((
-            cam_R_6d.flatten(start_dim=-2),
-            cam_t
-        ), dim=-1)
-
-        P, T, J, D = joints.shape
+        P, _, J, D = joints.shape
         x = torch.cat(
             (
                 joints.flatten(start_dim=-2),
@@ -422,7 +392,6 @@ class ToRepresentation:
                 torch.cat((torch.zeros(P, 1, 4), foot_contact), dim=1).flatten(
                     start_dim=-1
                 ),
-                cam_ext[None, None].repeat(P, T, 1)
             ),
             dim=-1,
         )

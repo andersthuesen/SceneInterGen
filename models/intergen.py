@@ -28,7 +28,7 @@ class InterGen(nn.Module):
         self.register_buffer("std", std, persistent=False)
 
     def compute_loss(self, batch):
-        # batch = self.text_process(batch)
+        batch = self.text_process(batch)
         losses = self.decoder.compute_loss(batch, self.mean, self.std)
         return losses["total"], losses
 
@@ -40,7 +40,7 @@ class InterGen(nn.Module):
         return self.compute_loss(batch)
 
     def forward_test(self, batch):
-        # batch = self.text_process(batch)
+        batch = self.text_process(batch)
         batch.update(self.decode_motion(batch))
         return batch
 

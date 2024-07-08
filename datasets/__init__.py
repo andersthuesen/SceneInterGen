@@ -100,9 +100,7 @@ class DataModule(pl.LightningDataModule):
                 augment=(
                     Compose(
                         [
-                            # ChooseRandomDescription(),
-                            AppendRandomCamera(),
-                            AppendRenderedKeypoints(),
+                            ChooseRandomDescription(),
                             ToRepresentation(),
                         ]
                         + (

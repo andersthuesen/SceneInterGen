@@ -1386,9 +1386,6 @@ class MotionDiffusion(GaussianDiffusion):
         t_bar: int,
         mean: torch.Tensor,
         std: torch.Tensor,
-        cam_f: torch.Tensor,
-        kpts: torch.Tensor,
-        kpts_mask: torch.Tensor,
         *args,
         **kwargs,
     ):
@@ -1402,22 +1399,17 @@ class MotionDiffusion(GaussianDiffusion):
         t_mask = t <= t_bar
 
         # Split out the data
-        #       joints              joint_vels          6D body_pose    foot_contacts       # Camera extrinsics
-        SIZES = SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES + (23 * 3 * 2,) + (4,)                + (9,)
+        #       joints              joint_vels          6D body_pose    foot_contacts
+        SIZES = SMPL_JOINTS_SIZES + SMPL_JOINTS_SIZES + (23 * 3 * 2,) + (4,)
 
-        (tgt_joints, tgt_vels_, tgt_pose_6d, tgt_foot_contacts, tgt_cam_ext) = target.split(
+        (tgt_joints, tgt_vels_, tgt_pose_6d, tgt_foot_contacts) = target.split(
             SIZES, dim=-1
         )
         tgt_joints = tgt_joints.view(target.shape[:-1] + (-1, 3))
         tgt_vels_ = tgt_vels_.view(target.shape[:-1] + (-1, 3))
         tgt_pose_6d = tgt_pose_6d.view(target.shape[:-1] + (23, 3, 2))
 
-        tgt_cam_ext = tgt_cam_ext.mean(dim=(1, 2)) # Mean over people and frames
-        tgt_cam_R_6d, tgt_cam_t = tgt_cam_ext.split([6, 3], dim=-1)
-        tgt_cam_R_6d = tgt_cam_R_6d.view(*tgt_cam_R_6d.shape[:-1], 3, 2)
-        tgt_cam_R = rot6d_to_rotmat(tgt_cam_R_6d)
-
-        (pred_joints, pred_vels_, pred_pose_6d, pred_foot_contacts, pred_cam_ext_) = pred.split(
+        (pred_joints, pred_vels_, pred_pose_6d, pred_foot_contacts) = pred.split(
             SIZES, dim=-1
         )
         pred_joints = pred_joints.view(pred.shape[:-1] + (-1, 3))
@@ -1564,25 +1556,6 @@ class MotionDiffusion(GaussianDiffusion):
             # Divide by 2 as we the cosine similarity is symmetric
         )
 
-        # Transform joints to camera space
-        pred_joints_cam = (
-            pred_joints.flatten(start_dim=1, end_dim=-2) @ tgt_cam_R.mT + tgt_cam_t[:, None, :]
-        )
-
-        # Project joints to 2D keypoints
-        pred_kpts = (
-            pred_joints_cam[..., :2]
-            / (pred_joints_cam[..., 2:3] + 1e-6)
-            * cam_f[:, None, :]
-        )
-
-        pred_kpts = pred_kpts.view(kpts.shape)
-
-        pred_kpts_mask = torch.all((-1 < pred_kpts) & (pred_kpts < 1), dim=-1)
-        kpts_loss = w_mean(
-            t_mask[..., None, None, None, None] & kpts_mask[..., None] & pred_kpts_mask[..., None],
-            mse_loss(pred_kpts, kpts, reduction="none"),
-        )
 
         # Should be weighted by lambda_t
         simple_loss = w_mean(
@@ -1604,14 +1577,13 @@ class MotionDiffusion(GaussianDiffusion):
         )
 
         # Mask out regularization losses after t_bar
-        total_loss = simple_loss + reg_loss + 0.1 * kpts_loss
+        total_loss = simple_loss + reg_loss
 
         losses = {
             "MPJPE": mpjpe,
             "foot_loss": foot_loss,
             "ro_loss": ro_loss,
             "joint_loss": joint_loss,
-            "kpts_loss": kpts_loss,
             "pose_loss": pose_loss,
             "vel_loss_": vel_loss_,
             "vel_loss": vel_loss,

@@ -1,13 +1,9 @@
 import torch
-
-from models.smpl import SMPL_SKELETON
 from models.utils import *
 from models.cfg_sampler import ClassifierFreeSampleModel
 from models.blocks import *
 from utils.utils import *
 from smplx import SMPLLayer
-
-from scipy.spatial.transform import Rotation as R
 
 from models.gaussian_diffusion import (
     MotionDiffusion,
@@ -92,11 +88,7 @@ class InterDenoiser(nn.Module):
     def __init__(
         self,
         motion_dim: int,
-        cam_ext_dim: int,
         desc_dim: int,
-        kpts_dim: int,
-        num_classes: int,
-        num_actions: int,
         max_num_people: int = 16,
         bias=False,
         latent_dim=1024,
@@ -124,30 +116,13 @@ class InterDenoiser(nn.Module):
         self.points_group_size = points_group_size
 
         self.motion_dim = motion_dim
-        self.cam_ext_dim = cam_ext_dim
 
         # 2000 accommodates both the 1000 diffusion timesteps and 200 seconds of motion generation.
         # (training motion lenghts are 10s of 10fps = 100 frames in total)
         self.pe = PositionalEncoding(self.latent_dim, dropout=0, max_len=2000)
-
         self.emb_pos = TimestepEmbedder(self.latent_dim, self.pe)
-
         self.emb_t = TimestepEmbedder(self.latent_dim, self.pe)
-
-        self.emb_cam_ext = nn.Linear(cam_ext_dim, self.latent_dim)
-
-        self.emb_kpts = nn.Linear(kpts_dim, self.latent_dim)
         self.emb_id = nn.Embedding(max_num_people + 1, self.latent_dim)
-
-
-        # Add an extra identity for the no conditioning case
-        self.emb_class = nn.Embedding(num_classes + 1, self.latent_dim)
-        # Zero out the no conditioning identity
-        self.emb_class.weight.data[0].fill_(0.0)
-
-        self.emb_action = nn.Embedding(num_actions + 1, self.latent_dim)
-        # Zero out the no conditioning action
-        self.emb_action.weight.data[0].fill_(0.0)
 
         # Input Embedding
         self.emb_motion = nn.Linear(motion_dim, self.latent_dim)
@@ -155,11 +130,7 @@ class InterDenoiser(nn.Module):
         # Embed the description
         self.emb_desc = nn.Linear(desc_dim, self.latent_dim)
 
-        self.emb_points_group = nn.Linear(points_group_size * 3, self.latent_dim)
-
         self.unemb_motion = nn.Linear(self.latent_dim, motion_dim)
-
-        self.unemb_cam_ext = nn.Linear(self.latent_dim, cam_ext_dim)
 
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -177,46 +148,25 @@ class InterDenoiser(nn.Module):
     def forward(
         self,
         # Required
-        x: torch.Tensor,
+        motion: torch.Tensor,
         timesteps: torch.Tensor,
-        # Conditioning
-        kpts: Optional[torch.Tensor] = None,
-        classes: Optional[torch.Tensor] = None,
-        actions: Optional[torch.Tensor] = None,
-        description_emb: Optional[torch.Tensor] = None,
-        # Masks
         motion_mask: Optional[torch.Tensor] = None,
+        # Conditioning
+        description_emb: Optional[torch.Tensor] = None,
         description_mask: Optional[torch.Tensor] = None,
-        kpts_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        B, P, T = x.shape[:3]
-
-        motion, cam_ext = x.split((
-            self.motion_dim, self.cam_ext_dim
-        ), dim=-1)
+        B, P, T = motion.shape[:3]
 
         pos_emb = self.emb_pos(torch.arange(T, device=motion.device, dtype=torch.long))
+        ids_emb = self.emb_id(torch.randperm(self.max_num_people, device=motion.device))
 
         motion_emb = (
             self.emb_motion(motion)
             # Embed position
             + pos_emb[None, None, :, :]
             # Embed identity (Generate a random "id" for each person)
-            + self.emb_id(
-                torch.randperm(self.max_num_people, device=motion.device)[:P]
-            )[None, :, None, :]
+            + ids_emb[None, :, None, :]
         )
-
-        if classes is not None:
-            motion_emb += self.emb_class(classes)[:, :, None, :]
-
-        if actions is not None:
-            motion_emb[..., : actions.shape[-1], :] += self.emb_action(actions)
-
-        if kpts is not None and kpts_mask is not None:
-            # All kpts are within the frame.
-            all_kpts_mask = kpts_mask.all(dim=-1)
-            motion_emb[all_kpts_mask] += self.emb_kpts(kpts.flatten(start_dim=-2))[all_kpts_mask]
 
         # Prepare for transformer
         motion_emb_flat = rearrange(motion_emb, "B P T D -> B (P T) D")
@@ -246,21 +196,6 @@ class InterDenoiser(nn.Module):
         # Apply transformer
         in_flat = torch.cat((t_emb, motion_emb_flat), dim=1)
 
-        # Assume same static camera extrinsics for all people and frames
-        cam_ext = cam_ext.mean(dim=(1, 2))
-        cam_ext_emb = self.emb_cam_ext(cam_ext)
-
-        cam_ext_emb_flat = cam_ext_emb.unsqueeze(1)
-
-        mask_flat = torch.cat((
-            torch.ones_like(cam_ext_emb_flat[..., 0], dtype=torch.bool),
-            mask_flat
-        ), dim=1)
-
-        in_flat = torch.cat((
-            cam_ext_emb_flat,
-            in_flat
-        ), dim=1)
 
         if description_emb is not None:
             desc_emb_emb_flat = self.emb_desc(description_emb).unsqueeze(1)
@@ -275,16 +210,9 @@ class InterDenoiser(nn.Module):
         # while the position with the value of False will be unchanged.
         out_flat = self.transformer(in_flat, src_key_padding_mask=~mask_flat)
 
-        # if torch.isnan(out_flat).any():
-        #     print("NAN in output")
-        #     raise ValueError("NAN in output")
-
         if description_emb is not None:
             # Pop the description embedding
             out_flat = out_flat[:, 1:]
-
-        # Pop the camera extrinsics
-        cam_ext_emb_out, out_flat = out_flat[:, 0], out_flat[:, 1:]
 
         # Pop the timestep embedding
         _, motion_emb_flat_out = out_flat[:, 0], out_flat[:, 1:]
@@ -293,15 +221,8 @@ class InterDenoiser(nn.Module):
         motion_emb_out = rearrange(motion_emb_flat_out, "B (P T) D -> B P T D", P=P)
 
         motion_out = self.unemb_motion(motion_emb_out)
-        cam_ext_out = self.unemb_cam_ext(cam_ext_emb_out)
 
-        # Combine motion and camera extrinsics again
-        x_out = torch.cat((
-            motion_out,
-            cam_ext_out[:, None, None, :].repeat(1, P, T, 1)
-        ), dim=-1)
-
-        return x_out
+        return motion_out
 
 
 class InterDiffusion(nn.Module):
@@ -324,11 +245,7 @@ class InterDiffusion(nn.Module):
 
         self.net = InterDenoiser(
             motion_dim=cfg.MOTION_DIM,
-            cam_ext_dim=cfg.CAM_EXT_DIM,
             desc_dim=cfg.DESC_DIM,
-            kpts_dim=cfg.KPTS_DIM,
-            num_classes=cfg.NUM_CLASSES,
-            num_actions=cfg.NUM_ACTIONS,
             latent_dim=self.latent_dim,
             ff_size=self.ff_size,
             num_layers=self.num_layers,
@@ -372,11 +289,6 @@ class InterDiffusion(nn.Module):
 
         batch_size, *_ = x_start.shape
 
-        cam_f = batch["cam_f"]
-        kpts = batch["kpts"]
-
-        kpts_mask = mask[..., None] & torch.all((-1 < kpts) & (kpts < 1), dim=-1)
-
         t, weights = self.sampler.sample(batch_size, x_start.device)
         output = self.diffusion.training_losses(
             model=self.net,
@@ -387,13 +299,9 @@ class InterDiffusion(nn.Module):
             t_bar=self.cfg.T_BAR,
             mean=mean,
             std=std,
-            cam_f=cam_f,
-            kpts=kpts,
-            kpts_mask=kpts_mask,
             model_kwargs={
                 "motion_mask": batch["motion_mask"],
-                "kpts": kpts,
-                "kpts_mask": kpts_mask
+                # TODO: Include descriptions here
             },
         )
         return output
