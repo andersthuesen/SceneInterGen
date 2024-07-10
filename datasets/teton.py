@@ -1,4 +1,5 @@
 import os
+from os.path import join as pjoin
 import math
 import torch
 import pickle
@@ -103,29 +104,32 @@ class TetonDataset(Dataset):
     def __init__(
         self,
         root_path: str,
+        files_list: str,
         transform: Callable = None,
         augment: Callable = None,
         cache=False,
-        motion_filename="optimized_motion_transformed.pt",
+        motion_filename="motion.pt",
     ):
         super(TetonDataset, self).__init__()
         self.transform = transform
         self.augment = augment
         self.cache = cache
         self.motion_filename = motion_filename
-        path_cache_path = os.path.join(root_path, "path_cache.pkl")
-        self.paths = (
-            pickle.load(open(path_cache_path, "rb"))
-            if cache and os.path.exists(path_cache_path)
-            else [
-                path
-                for path, _, files in tqdm(os.walk(root_path), desc="Loading dataset")
-                if motion_filename in files
-            ]
-        )
+        files_list_path = pjoin(root_path, files_list)
+        self.paths = []
 
-        if cache and not os.path.exists(path_cache_path):
-            pickle.dump(self.paths, open(path_cache_path, "wb"))
+        i = 0
+        with open(files_list_path, "r") as f:
+            for path in f.readlines():
+                path = path.strip()
+                if not os.path.exists(pjoin(root_path, path, motion_filename)):
+                    i += 1
+                    continue
+                
+                self.paths.append(pjoin(root_path, path.strip()))
+
+        if i > 0:
+            print(f"Failed to find {i} paths")
 
     def __len__(self):
         return len(self.paths)
@@ -178,6 +182,12 @@ class TetonDataset(Dataset):
             "motion_mask": motion_mask,
             "description_tokens": description_tokens,
             "description_embs": description_embs,
+            "description_mask": (
+                torch.tensor([
+                    description_tokens is not None 
+                    and description_embs is not None
+                ], dtype=torch.bool)
+            )
         }
 
         if self.transform:
@@ -368,7 +378,7 @@ class ChooseRandomDescription:
         return {
             **data,
             "description_token": description_tokens[idx],
-            "description_emb": description_embs[idx],
+            "description_emb": description_embs[idx]
         }
 
 

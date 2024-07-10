@@ -106,15 +106,6 @@ if __name__ == "__main__":
 
     model = InterGen(model_cfg, mean, std)
 
-    # Remove after use
-    ckpt = torch.load(
-        "/work3/s183926/checkpoints/UNCOND/model/epoch=99-step=16100-v1.ckpt", map_location="cpu"
-    )
-    for k in list(ckpt["state_dict"].keys()):
-        if "model" in k:
-            ckpt["state_dict"][k.replace("model.", "")] = ckpt["state_dict"].pop(k)
-    model.load_state_dict(ckpt["state_dict"], strict=False)
-    print("checkpoint state loaded!")
 
     litmodel = LitTrainModel(model, train_cfg)
 

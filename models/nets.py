@@ -158,7 +158,7 @@ class InterDenoiser(nn.Module):
         B, P, T = motion.shape[:3]
 
         pos_emb = self.emb_pos(torch.arange(T, device=motion.device, dtype=torch.long))
-        ids_emb = self.emb_id(torch.randperm(self.max_num_people, device=motion.device))
+        ids_emb = self.emb_id(torch.randperm(self.max_num_people, device=motion.device)[:P])
 
         motion_emb = (
             self.emb_motion(motion)
@@ -229,6 +229,7 @@ class InterDiffusion(nn.Module):
     def __init__(self, cfg, sampling_strategy="ddim50"):
         super().__init__()
         self.cfg = cfg
+        self.motion_dim = cfg.MOTION_DIM
         self.latent_dim = cfg.LATENT_DIM
         self.ff_size = cfg.FF_SIZE
         self.num_layers = cfg.NUM_LAYERS
@@ -289,6 +290,8 @@ class InterDiffusion(nn.Module):
 
         batch_size, *_ = x_start.shape
 
+        description_mask = self.batch_cond_mask(batch["description_mask"])
+
         t, weights = self.sampler.sample(batch_size, x_start.device)
         output = self.diffusion.training_losses(
             model=self.net,
@@ -301,7 +304,8 @@ class InterDiffusion(nn.Module):
             std=std,
             model_kwargs={
                 "motion_mask": batch["motion_mask"],
-                # TODO: Include descriptions here
+                "description_emb": batch["description_emb"],
+                "description_mask": description_mask
             },
         )
         return output
@@ -322,13 +326,53 @@ class InterDiffusion(nn.Module):
             rescale_timesteps=False,
         )
 
-        self.cfg_model = ClassifierFreeSampleModel(self.net, self.cfg_weight)
-        output = self.diffusion_test.ddim_sample_loop(
-            self.cfg_model,
-            (num_batches, num_people, num_frames, self.nfeats),
-            clip_denoised=False,
-            progress=True,
-            model_kwargs={"motion_mask": batch["motion_mask"]},
-        )
+
+        # Conditional generation
+        if "description_emb" in batch and "description_mask" in batch:
+            
+            cfg_model = ClassifierFreeSampleModel(self.net, self.cfg_weight)
+            output = self.diffusion_test.ddim_sample_loop(
+                cfg_model,
+                (num_batches, num_people, num_frames, self.motion_dim),
+                clip_denoised=False,
+                progress=True,
+                model_kwargs={
+                    "motion_mask": batch["motion_mask"],
+                    "description_emb": batch["description_emb"],
+                    "description_mask": batch["description_mask"]
+                },
+            )
+        elif "kpts" in batch and "cam_R" in batch and "cam_t" in batch:
+
+            kpts = batch["kpts"]
+            cam_R = batch["cam_R"]
+            cam_t = batch["cam_t"]
+            cam_t = batch["cam_t"]
+
+
+            def kpt_guidance(x: torch.Tensor, t: torch.Tensor, **kwargs):
+                joints = x[..., :24*3] # Get the joints
+
+                # Transform to camera coordinate system
+                joints_cam = joints @ cam_R.mT + cam_t
+
+                # Project
+
+                
+                # Return gradient of x. (Only for some t > ?)
+
+
+            output = self.diffusion_test.ddim_sample_loop(
+                self.net, # Use original network
+                (num_batches, num_people, num_frames, self.motion_dim),
+                clip_denoised=False,
+                progress=True,
+                model_kwargs={
+                    "motion_mask": batch["motion_mask"],
+                    "description_emb": batch["description_emb"],
+                    "description_mask": batch["description_mask"]
+                },
+                cond_fn=kpt_guidance
+            )
 
         return {"output": output}

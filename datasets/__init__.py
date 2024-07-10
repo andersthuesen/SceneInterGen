@@ -87,9 +87,10 @@ class DataModule(pl.LightningDataModule):
         """
         datasets = []
         for dataset_name, dataset_cfg in self.cfg.items():
-            print(f"Loading {dataset_name}")
+            print(f"Using {dataset_name}")
             dataset = TetonDataset(
                 root_path=dataset_cfg.DATA_ROOT,
+                files_list=dataset_cfg.FILES_LIST,
                 transform=Compose(
                     [
                         AppendSMPLJoints(self.smpl),
