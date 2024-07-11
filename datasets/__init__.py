@@ -8,6 +8,7 @@ from .teton import (
     AppendRandomCamera,
     AppendRenderedKeypoints,
     AppendSMPLJoints,
+    RandomRotate,
     TetonDataset,
     ChooseRandomDescription,
     ToRepresentation,
@@ -101,7 +102,8 @@ class DataModule(pl.LightningDataModule):
                 augment=(
                     Compose(
                         [
-                            ChooseRandomDescription(),
+                            # ChooseRandomDescription(),
+                            RandomRotate(),
                             ToRepresentation(),
                         ]
                         + (

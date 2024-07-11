@@ -304,8 +304,8 @@ class InterDiffusion(nn.Module):
             std=std,
             model_kwargs={
                 "motion_mask": batch["motion_mask"],
-                "description_emb": batch["description_emb"],
-                "description_mask": description_mask
+                # "description_emb": batch["description_emb"],
+                # "description_mask": description_mask
             },
         )
         return output

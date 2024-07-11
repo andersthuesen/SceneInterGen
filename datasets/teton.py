@@ -382,6 +382,24 @@ class ChooseRandomDescription:
         }
 
 
+
+class RandomRotate:
+    def __init__(self, max_angle=360):
+        self.max_angle = max_angle
+
+    def __call__(self, data: dict) -> dict:
+        joints = data["joints"]
+        joint_vels = data["joint_vels"]
+
+        # Rotate the joints
+        r = R.from_euler("z", torch.rand(1) * self.max_angle, degrees=True)
+        rotmat = r.as_matrix()[0]
+
+        joints_rotated = (joints @ rotmat.T).type(joints.dtype)
+        joint_vels_rotated = (joint_vels @ rotmat.T).type(joint_vels.dtype)
+
+        return {**data, "joints": joints_rotated, "joint_vels": joint_vels_rotated}
+
 class ToRepresentation:
     def __call__(self, data: dict) -> dict:
         joints = data["joints"]
